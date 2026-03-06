@@ -23,6 +23,11 @@ BRIDGE_CONFIG = {
     # Port for the UPnP HTTP server (1400 is standard Sonos, use it if available)
     "http_port": 1400,
 
+    # node-sonos-http-api base URL
+    # Install: npm install -g node-sonos-http-api
+    # Run:     node-sonos-http-api  (default port 5005)
+    "sonos_http_api_base": "http://localhost:5005",
+
     # Logging level: DEBUG, INFO, WARNING, ERROR
     "log_level": "INFO",
 
