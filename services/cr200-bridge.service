@@ -1,0 +1,25 @@
+[Unit]
+Description=CR200 Sonos Bridge
+Documentation=https://github.com/handyandy87/SONOS-CR2002S2
+After=network-online.target node-sonos-http-api.service
+Wants=network-online.target
+Requires=node-sonos-http-api.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+
+# Create the logs directory before starting (main.py writes logs/bridge.log)
+ExecStartPre=/bin/mkdir -p __WORKDIR__/logs
+
+ExecStart=/usr/bin/python3 __WORKDIR__/main.py
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cr200-bridge
+
+[Install]
+WantedBy=multi-user.target
