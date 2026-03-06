@@ -33,7 +33,6 @@ All code in this repository should be considered **unverified**. Before relying 
 ### What Still Needs Testing
 
 - [ ] Packet capture and parsing against real SONOSNET traffic
-- [ ] Behavior when no wired speaker is present (degraded/Wi-Fi-only mode)
 - [ ] Handling of multiple wired speakers (SONOSNET coordinator election)
 - [ ] Pi receiving packets across a managed switch vs. unmanaged switch
 - [ ] Any code paths that depend on specific S2 firmware versions
