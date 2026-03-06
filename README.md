@@ -148,6 +148,7 @@ This project has **not been fully tested**. Before using or contributing, ensure
 - Multicast to `239.255.255.250` (SSDP/UPnP) must **not be filtered** by your router or switch
 - If speakers and the Pi are on **different VLANs**, you will need multicast routing or an SSDP/mDNS proxy such as `avahi-daemon` (reflector mode) or `udp-proxy-2020`
 - AP **client isolation** must be disabled, or the CR200 and Pi must be on the same isolation group
+- If a wired Sonos S2 speaker is acting as a **Layer 2 bridge between SonosNet and your LAN** (i.e. the speaker bridges the two segments at L2 rather than routing between them), the Pi can potentially be placed on that same bridged segment to receive SonosNet traffic directly — no VLAN routing or multicast proxy needed in that case
 
 ### What Still Needs Testing
 
