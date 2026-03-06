@@ -12,6 +12,34 @@ This repository is in its initial state. When source code is added, update this 
 
 ---
 
+## Testing Status
+
+> **WARNING: This project has not been fully tested yet.**
+
+All code in this repository should be considered **unverified**. Before relying on any functionality, ensure the following prerequisites are met and validate behavior against a real hardware setup.
+
+### Hardware Requirements
+
+- At least **one wired Sonos S2 speaker** (e.g., Era 100/300, Arc, Beam Gen 2, Five, Move 2) connected via Ethernet
+- **SONOSNET must be enabled** on that wired speaker — this is the mesh network Sonos uses to coordinate devices; without it, multicast traffic patterns will differ
+- A **Raspberry Pi** (or equivalent) on the same network segment, capable of receiving SONOS multicast/broadcast packets
+
+### Network Assumptions
+
+- The Pi must be able to **receive packets from the Sonos subnet** — verify there are no VLAN boundaries, firewall rules, or AP client isolation settings blocking traffic between the Pi and the Sonos speakers
+- Multicast traffic (particularly to `239.255.255.250` for SSDP) must not be filtered by the router or switch
+- If Sonos speakers and the Pi are on different VLANs, multicast routing or a mDNS/SSDP proxy (e.g., `avahi-daemon` with reflector mode, or `udp-proxy-2020`) will be required
+
+### What Still Needs Testing
+
+- [ ] Packet capture and parsing against real SONOSNET traffic
+- [ ] Behavior when no wired speaker is present (degraded/Wi-Fi-only mode)
+- [ ] Handling of multiple wired speakers (SONOSNET coordinator election)
+- [ ] Pi receiving packets across a managed switch vs. unmanaged switch
+- [ ] Any code paths that depend on specific S2 firmware versions
+
+---
+
 ## Git Workflow
 
 ### Branch Naming
