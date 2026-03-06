@@ -22,6 +22,12 @@ Real S2 Speakers
 
 ---
 
+> **WARNING: This project has not been fully tested yet.**
+> All code should be considered unverified until validated against real hardware.
+> See [Testing Prerequisites](#testing-prerequisites) below before use.
+
+---
+
 ## Requirements
 
 - **Node.js 14+** and npm
@@ -123,6 +129,33 @@ bridge/
 logs/
   bridge.log
 ```
+
+---
+
+## Testing Prerequisites
+
+This project has **not been fully tested**. Before using or contributing, ensure the following conditions are met.
+
+### Required Hardware
+
+- At least **one wired Sonos S2 speaker** (Era 100/300, Arc, Beam Gen 2, Five, Move 2, etc.) connected via Ethernet
+- **SONOSNET must be enabled** on that wired speaker — without it, the multicast/mesh traffic patterns the bridge relies on will differ or be absent
+- A **Raspberry Pi** (or equivalent) on the same network segment
+
+### Network Assumptions
+
+- The Pi must be on the **same LAN subnet** as the Sonos speakers and able to receive their multicast/broadcast packets
+- Multicast to `239.255.255.250` (SSDP/UPnP) must **not be filtered** by your router or switch
+- If speakers and the Pi are on **different VLANs**, you will need multicast routing or an SSDP/mDNS proxy such as `avahi-daemon` (reflector mode) or `udp-proxy-2020`
+- AP **client isolation** must be disabled, or the CR200 and Pi must be on the same isolation group
+
+### What Still Needs Testing
+
+- [ ] Packet capture and parsing against real SONOSNET traffic
+- [ ] Behavior when no wired speaker is present (Wi-Fi-only Sonos setup)
+- [ ] Handling of multiple wired speakers (SONOSNET coordinator election)
+- [ ] Pi receiving packets through a managed switch vs. unmanaged switch
+- [ ] Compatibility across S2 firmware versions
 
 ---
 
