@@ -156,7 +156,6 @@ This project has **not been fully tested**. Before using or contributing, ensure
 ### What Still Needs Testing
 
 - [ ] Packet capture and parsing against real SONOSNET traffic
-- [ ] Behavior when no wired speaker is present (Wi-Fi-only Sonos setup)
 - [ ] Handling of multiple wired speakers (SONOSNET coordinator election)
 - [ ] Pi receiving packets through a managed switch vs. unmanaged switch
 - [ ] Compatibility across S2 firmware versions
