@@ -12,9 +12,9 @@ automatically at startup; re-running this wizard updates it in place.
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -91,27 +91,73 @@ def check_python():
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — Node.js check
+# Step 2 — Node.js + npm (with optional install)
 # ---------------------------------------------------------------------------
+
+def _run(cmd, timeout=30):
+    """Run a command quietly, return CompletedProcess. Never raises on failure."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        class _Fake:
+            returncode = 1
+            stdout = stderr = ""
+        return _Fake()
+
+
+def _apt_available():
+    return shutil.which("apt") is not None
+
+
+def _install_nodejs_apt():
+    """Try to install nodejs+npm via apt. Returns True on success."""
+    print("  Running: sudo apt install -y nodejs npm")
+    result = subprocess.run(["sudo", "apt", "install", "-y", "nodejs", "npm"], timeout=180)
+    return result.returncode == 0
+
 
 def check_node():
+    """Check for node and npm; offer apt install if absent. Returns (node_path, npm_path)."""
     section("Node.js")
     node = shutil.which("node")
+
     if not node:
         warn("node not found in PATH.")
-        print("    Install Node.js: https://nodejs.org  or  sudo apt install nodejs npm")
-        print("    Then install the API:  npm install -g node-sonos-http-api")
-        return None
+        if _apt_available():
+            answer = input("  Install nodejs + npm via apt now? [Y/n] ").strip().lower()
+            if answer != "n":
+                if _install_nodejs_apt():
+                    node = shutil.which("node")
+                    if node:
+                        ok(f"node installed: {node}")
+                    else:
+                        warn("node still not found after install. You may need to open a new shell.")
+                        return None, None
+                else:
+                    warn("apt install failed.")
+                    return None, None
+        else:
+            print("  Install Node.js from https://nodejs.org or via your package manager.")
+            return None, None
+
     try:
-        result = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=5)
-        ok(f"node {result.stdout.strip()}  ({node})")
+        r = _run([node, "--version"])
+        ok(f"node {r.stdout.strip()}  ({node})")
     except Exception as e:
         warn(f"Could not query node version: {e}")
-    return node
+
+    npm = shutil.which("npm")
+    if npm:
+        r = _run([npm, "--version"])
+        ok(f"npm  {r.stdout.strip()}  ({npm})")
+    else:
+        warn("npm not found in PATH.")
+
+    return node, npm
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — node-sonos-http-api connectivity & auto-discovery
+# Step 3 — node-sonos-http-api: detect, install, start
 # ---------------------------------------------------------------------------
 
 def discover_api(api_base):
@@ -136,19 +182,112 @@ def discover_api(api_base):
         return None, []
 
 
-def check_api(api_base):
+def ensure_node_api(npm):
+    """Check if node-sonos-http-api is installed; offer npm install if not.
+    Returns the server.js path, or "" if unavailable."""
+    section("node-sonos-http-api package")
+
+    path = find_node_api_path()
+    if path:
+        ok(f"Already installed: {path}")
+        return path
+
+    warn("node-sonos-http-api not found.")
+
+    if npm is None:
+        print("  npm is not available — cannot install automatically.")
+        print("  Install manually:  sudo npm install -g node-sonos-http-api")
+        return ""
+
+    answer = input("  Install now? (npm install -g node-sonos-http-api) [Y/n] ").strip().lower()
+    if answer == "n":
+        print("  Skipped. Install later:  sudo npm install -g node-sonos-http-api")
+        return ""
+
+    print("  Installing … (this may take a minute)")
+    # Try without sudo first (succeeds if npm prefix is user-writable)
+    result = subprocess.run([npm, "install", "-g", "node-sonos-http-api"], timeout=300)
+    if result.returncode != 0:
+        print("  Retrying with sudo …")
+        result = subprocess.run(
+            ["sudo", npm, "install", "-g", "node-sonos-http-api"], timeout=300
+        )
+
+    if result.returncode != 0:
+        warn("npm install failed. Try manually:  sudo npm install -g node-sonos-http-api")
+        return ""
+
+    path = find_node_api_path()
+    if path:
+        ok(f"Installed: {path}")
+    else:
+        warn("Installed, but path not auto-detected. You may need to set it manually.")
+    return path
+
+
+def start_api_for_discovery(node_api_path):
+    """Start node-sonos-http-api in the background for discovery. Returns Popen or None."""
+    node = shutil.which("node")
+    if not node or not node_api_path:
+        return None
+    try:
+        proc = subprocess.Popen(
+            [node, node_api_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return proc
+    except Exception as e:
+        warn(f"Could not start node-sonos-http-api: {e}")
+        return None
+
+
+def check_api(api_base, node_api_path=""):
+    """Probe the API; if unreachable and we have the path, offer to start it."""
     section("node-sonos-http-api connectivity")
     print(f"  Trying {api_base}/zones …")
     household_id, rooms = discover_api(api_base)
+
     if rooms:
         ok(f"Connected — {len(rooms)} room(s) found: {', '.join(rooms)}")
         if household_id:
             ok(f"Household ID auto-discovered: {household_id}")
+        return household_id, rooms, None   # (hid, rooms, background_proc)
+
+    warn("Could not reach node-sonos-http-api.")
+
+    if not node_api_path:
+        print("  Start it with:  node-sonos-http-api")
+        return None, [], None
+
+    answer = input("  Start it now for speaker discovery? [Y/n] ").strip().lower()
+    if answer == "n":
+        return None, [], None
+
+    proc = start_api_for_discovery(node_api_path)
+    if proc is None:
+        return None, [], None
+
+    print("  Waiting for API to start …", end="", flush=True)
+    for _ in range(8):
+        time.sleep(1)
+        print(".", end="", flush=True)
+        household_id, rooms = discover_api(api_base)
+        if rooms:
+            break
+    print()
+
+    if rooms:
+        ok(f"Connected — {len(rooms)} room(s) found: {', '.join(rooms)}")
+        if household_id:
+            ok(f"Household ID auto-discovered: {household_id}")
+        print("  (node-sonos-http-api is running in the background — leave it running.)")
     else:
-        warn("Could not reach node-sonos-http-api.")
-        print("    Make sure it is running:  node-sonos-http-api")
-        print("    Or install it:            npm install -g node-sonos-http-api")
-    return household_id, rooms
+        warn("API started but could not discover speakers. Check that your Sonos system is on the same network.")
+        proc.terminate()
+        proc = None
+
+    return household_id, rooms, proc
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +465,9 @@ def main():
     banner()
 
     check_python()
-    check_node()
+    node, npm = check_node()
 
-    # Load existing config.json if present (so we preserve UUID etc.)
+    # Load existing config.json if present (preserves UUID, node_api_path, etc.)
     existing = {}
     if os.path.isfile(CONFIG_JSON):
         try:
@@ -338,9 +477,14 @@ def main():
         except Exception as e:
             warn(f"Could not read existing config.json: {e}")
 
-    # Auto-discover API settings
+    # Ensure node-sonos-http-api is installed; install if missing
+    node_api_path = existing.get("node_api_path", "") or find_node_api_path()
+    if not node_api_path:
+        node_api_path = ensure_node_api(npm)
+
+    # Probe the API; start it temporarily if installed but not running
     api_base = existing.get("sonos_http_api_base", DEFAULTS["sonos_http_api_base"])
-    discovered_household, rooms = check_api(api_base)
+    discovered_household, rooms, _bg_proc = check_api(api_base, node_api_path)
 
     # Show discovered rooms (informational)
     if rooms:
@@ -348,13 +492,10 @@ def main():
         for room in rooms:
             print(f"    • {room}")
 
-    # Find node-sonos-http-api path for systemd unit
-    node_api_path = existing.get("node_api_path", "") or find_node_api_path()
-
     # Walk through config prompts
     cfg = configure(existing, discovered_household, api_base)
 
-    # Store node API path in config.json for install-service.sh to use
+    # Persist node_api_path so install-service.sh can use it
     if node_api_path:
         cfg["node_api_path"] = node_api_path
 
