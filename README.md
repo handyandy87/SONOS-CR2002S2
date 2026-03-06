@@ -82,8 +82,11 @@ python3 main.py   # may need sudo for port 1400
 
 ### 5. Connect the CR200
 
-Put the CR200 into Wi-Fi setup mode and connect it to your network as normal.
-It will discover the bridge via UPnP and pair with it.
+The CR200 does **not** use standard Wi-Fi — it connects exclusively via **SonosNet**,
+the proprietary mesh network that Sonos S1 speakers coordinate over.
+Ensure at least one wired Sonos speaker has SonosNet enabled; the CR200 will
+join that mesh automatically. Once on SonosNet it will discover the bridge
+via UPnP and pair with it.
 
 ---
 
