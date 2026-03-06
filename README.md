@@ -33,48 +33,83 @@ Real S2 Speakers
 
 ## Setup
 
-### 1. Install and start node-sonos-http-api
+### Quick start — interactive wizard (recommended)
+
+Run the setup wizard once after cloning the repo:
+
+```bash
+python3 setup.py
+```
+
+The wizard walks you through every step interactively:
+
+| Step | What it does |
+|---|---|
+| Python check | Confirms Python 3.10+ is present |
+| Node.js | Detects `node`/`npm`; offers `sudo apt install -y nodejs npm` if missing |
+| node-sonos-http-api | Detects existing install; offers `npm install -g node-sonos-http-api` if missing |
+| API connectivity | Probes `http://localhost:5005/zones`; offers to start the API in the background if installed but not running |
+| Speaker discovery | Auto-discovers your Household ID and lists all Sonos rooms |
+| Configuration | Prompts for friendly name, ports, log level, etc. — with sensible defaults |
+| `config.json` | Writes (or updates) the bridge config file |
+| `logs/` | Creates the log directory if absent |
+| Autostart | Optionally installs systemd services for Pi boot launch |
+
+After the wizard finishes, start the bridge:
+
+```bash
+python3 main.py   # may need sudo for port 1400
+```
+
+Then put the CR200 into Wi-Fi setup mode and connect it to your network as normal — it will discover the bridge via UPnP and pair with it.
+
+---
+
+### Manual setup (advanced)
+
+If you prefer to configure things by hand:
+
+**1. Install and start node-sonos-http-api**
 
 ```bash
 npm install -g node-sonos-http-api
 node-sonos-http-api
 ```
 
-Verify it works:
+Verify:
 ```bash
 curl http://localhost:5005/zones
 # Should return JSON with your Sonos rooms
 ```
 
-### 2. Get your Household ID
+**2. Get your Household ID**
 
 ```bash
 curl http://localhost:5005/zones | python3 -m json.tool | grep -i household
 ```
 
-### 3. Edit `bridge/config.py`
+**3. Create `config.json`**
 
-```python
-BRIDGE_CONFIG = {
-    "uuid":                "1a2b3c4d-...",          # Keep or regenerate
-    "household_id":        "Sonos_REPLACE_ME",      # <- paste here
-    "friendly_name":       "CR200 Bridge",
-    "http_port":           1400,
-    "sonos_http_api_base": "http://localhost:5005",
-    "status_port":         8080,
-    "log_level":           "INFO",
+```json
+{
+  "uuid": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+  "household_id": "Sonos_REPLACE_ME",
+  "friendly_name": "CR200 Bridge",
+  "http_port": 1400,
+  "sonos_http_api_base": "http://localhost:5005",
+  "status_port": 8080,
+  "log_level": "INFO"
 }
 ```
 
-### 4. Run the bridge
+**4. Run the bridge**
 
 ```bash
-cd bridge
 mkdir -p logs
 python3 main.py   # may need sudo for port 1400
 ```
 
-### 5. Connect the CR200
+**5. Connect the CR200**
 
 Put the CR200 into Wi-Fi setup mode and connect it to your network as normal.
 It will discover the bridge via UPnP and pair with it.
