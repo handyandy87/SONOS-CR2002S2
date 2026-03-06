@@ -1,9 +1,11 @@
 """
 Bridge Configuration
-Edit these values before running the bridge.
+Defaults are defined below. To override, run setup.py — it writes
+config.json next to this file, which is loaded at import time.
 """
 
-import uuid as _uuid
+import json as _json
+import os as _os
 
 BRIDGE_CONFIG = {
     # A stable UUID for the fake Sonos device we're advertising.
@@ -34,3 +36,14 @@ BRIDGE_CONFIG = {
     # Status web UI port (separate from UPnP port)
     "status_port": 8080,
 }
+
+# Load runtime overrides from config.json (written by setup.py).
+# If the file is absent or unreadable, the hardcoded defaults above remain active.
+_CONFIG_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "config.json")
+if _os.path.isfile(_CONFIG_FILE):
+    try:
+        with open(_CONFIG_FILE) as _f:
+            BRIDGE_CONFIG.update(_json.load(_f))
+    except (_json.JSONDecodeError, OSError) as _e:
+        import sys as _sys
+        print(f"[config] Warning: could not load config.json: {_e}", file=_sys.stderr)

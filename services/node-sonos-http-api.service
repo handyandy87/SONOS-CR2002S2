@@ -1,0 +1,25 @@
+[Unit]
+Description=node-sonos-http-api (Sonos HTTP bridge)
+Documentation=https://github.com/jishi/node-sonos-http-api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+
+# Path is substituted by install-service.sh from config.json node_api_path.
+# Common install locations (npm install -g node-sonos-http-api):
+#   /usr/lib/node_modules/node-sonos-http-api/server.js
+#   /usr/local/lib/node_modules/node-sonos-http-api/server.js
+ExecStart=/usr/bin/node __NODE_API_PATH__
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=node-sonos-http-api
+
+[Install]
+WantedBy=multi-user.target

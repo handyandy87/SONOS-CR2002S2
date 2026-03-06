@@ -1,0 +1,10 @@
+# Runtime configuration — contains user-specific settings (household_id, uuid, etc.)
+config.json
+
+# Bridge logs
+logs/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
