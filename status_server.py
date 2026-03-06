@@ -140,10 +140,13 @@ function renderStatus(data) {
     speakersEl.innerHTML = '<p style="color:#666;font-size:0.85rem">No speakers found. Try rediscover.</p>';
   } else {
     speakersEl.innerHTML = data.speakers.map(s => `
-      <div class="speaker ${s.active ? 'active' : ''}" onclick="setActive('${s.uuid}')">
-        <div>
-          <div class="speaker-name">${stateDot(s.state)}${s.name}</div>
-          <div class="speaker-meta">${s.ip} · Vol ${s.volume}</div>
+      <div class="speaker ${s.active ? 'active' : ''}" onclick="setActive('${s.name}')">
+        <div style="display:flex;align-items:center;gap:10px">
+          ${s.artwork ? `<img src="${s.artwork}" style="width:40px;height:40px;border-radius:4px;object-fit:cover" onerror="this.style.display='none'">` : ''}
+          <div>
+            <div class="speaker-name">${stateDot(s.state)}${s.name}</div>
+            <div class="speaker-meta">${s.track ? `${s.track}${s.artist ? ' — ' + s.artist : ''}` : 'Nothing playing'} · Vol ${s.volume}</div>
+          </div>
         </div>
         ${stateBadge(s.state)}
       </div>
@@ -165,11 +168,11 @@ function renderStatus(data) {
   }
 }
 
-async function setActive(uuid) {
+async function setActive(name) {
   await fetch('/api/set-active', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({uuid})
+    body: JSON.stringify({name})
   });
   fetchStatus();
 }
@@ -211,7 +214,13 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/set-active":
             data = json.loads(body)
-            success = self.zone_manager.set_active_speaker(data.get("uuid", ""))
+            # SonosClient uses room name; fall back to uuid for compat
+            key = data.get("name") or data.get("uuid", "")
+            success = (
+                self.zone_manager.set_active_room(key)
+                if hasattr(self.zone_manager, "set_active_room")
+                else self.zone_manager.set_active_speaker(key)
+            )
             self._json_response({"success": success})
         elif path == "/api/rediscover":
             self.zone_manager.force_rediscover()
@@ -254,8 +263,8 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
 
 
 class StatusServer:
-    def __init__(self, zone_manager):
-        StatusRequestHandler.zone_manager = zone_manager
+    def __init__(self, sonos_client):
+        StatusRequestHandler.zone_manager = sonos_client  # duck-typed: get_room_list, set_active_speaker->set_active_room, force_rediscover
         StatusRequestHandler.start_time = time.time()
         self._server = None
         self._thread = None
