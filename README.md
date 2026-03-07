@@ -75,6 +75,18 @@ S1 device (Sonos Bridge / Connect / Play:1 Gen 1 / etc.)
 
 ## Getting Started
 
+> **New here? Use the setup wizard.**
+> After cloning the repo (step 1) and installing Node.js (step 2), run:
+> ```bash
+> python3 setup.py
+> ```
+> The wizard installs `node-sonos-http-api`, discovers your Sonos devices,
+> walks you through every config option, and writes `config.json` for you.
+> When it finishes, jump straight to [step 7](#7-start-the-bridge).
+> Steps 3–6 below document the same process manually for reference.
+
+---
+
 ### 1. Clone the repo
 
 ```bash

@@ -375,7 +375,7 @@ def configure(existing, rooms, discovered_household):
     print()
     print("  The S1 device is the physical Sonos unit the CR200 connects to over SonosNet.")
     print("  Supported: Sonos Bridge, Connect, Connect:Amp,")
-    print("             Play:1 Gen 1, Play:3 Gen 1, Play:5 Gen 1")
+    print("             Play:1 Gen 1, Play:3 Gen 1, Play:5 Gen 1, PLAYBAR")
     cfg["s1_room_name"] = prompt_from_list(
         "S1 device room name (as shown in node-sonos-http-api)",
         rooms,
@@ -557,7 +557,7 @@ def main():
             print(f"    • {room}")
         print()
         print("  Identify which room is your S1 device and which is your S2 speaker.")
-        print("  (S1 devices: Bridge, Connect, Connect:Amp, Play:1/3/5 Gen 1)")
+        print("  (S1 devices: Bridge, Connect, Connect:Amp, Play:1/3/5 Gen 1, PLAYBAR)")
 
     # Walk through config prompts
     cfg = configure(existing, rooms, discovered_household)
@@ -575,7 +575,14 @@ def main():
     ok("Configuration complete.")
     print()
     print("  To start the bridge:")
-    print("    python3 main.py")
+    print("    sudo python3 main.py")
+    print()
+    print("  (sudo is required on Linux for port 1400.)")
+    print()
+    print("  To pair the CR200:")
+    print("    Power on the CR200. It will prompt you to initiate pairing")
+    print("    from an S1 device. Follow that prompt on the S1 device —")
+    print("    the CR200 will join SonosNet and discover the bridge.")
     print()
     print("  To verify your Sonos API connection:")
     print(f"    curl {cfg['sonos_http_api_base']}/zones")
