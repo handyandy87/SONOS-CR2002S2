@@ -382,6 +382,30 @@ class SonosClient:
                 })
             return zones
 
+    def get_active_room_ip(self) -> str:
+        """Return the IP address of the active room's coordinator, or '' if unknown."""
+        room = self.get_active_room()
+        if room is None:
+            return ""
+        with self._lock:
+            state = room.raw_state()
+        member_ips: dict = state.get("_member_ips", {})
+        return member_ips.get(room.uuid, "")
+
+    def get_household_id(self) -> str:
+        """
+        Fetch the household ID from node-sonos-http-api /zones.
+        Returns '' if the API is unreachable or the field is absent.
+        """
+        zones = _get("/zones")
+        if not zones:
+            return ""
+        for zone in zones:
+            hid = zone.get("householdId") or zone.get("household_id")
+            if hid:
+                return hid
+        return ""
+
     # -------------------------------------------------------------------------
     # Music services / browsing (via node-sonos-http-api)
     # -------------------------------------------------------------------------

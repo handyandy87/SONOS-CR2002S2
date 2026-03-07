@@ -8,35 +8,52 @@ import json as _json
 import os as _os
 
 BRIDGE_CONFIG = {
-    # A stable UUID for the fake Sonos device we're advertising.
-    # Generate once and keep consistent — the CR200 remembers it.
-    # You can regenerate with: python3 -c "import uuid; print(uuid.uuid4())"
-    "uuid": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-
-    # Sonos household ID — the CR200 uses this to group devices.
-    # Should look like "Sonos_xxxxxxxxxxxx". You can use any consistent string,
-    # or sniff the real one from your S2 speakers via:
-    #   python3 -c "import soco; s = list(soco.discover())[0]; print(s.household_id)"
-    "household_id": "Sonos_REPLACE_WITH_YOUR_HOUSEHOLD_ID",
-
-    # Friendly name shown on the CR200 screen for this "player"
-    "friendly_name": "CR200 Bridge",
-
-    # Port for the UPnP HTTP server (1400 is standard Sonos, use it if available)
-    "http_port": 1400,
-
     # node-sonos-http-api base URL
     # Install: npm install -g https://github.com/jishi/node-sonos-http-api
     # Run:     node /usr/local/lib/node_modules/sonos-http-api/server.js
     "sonos_http_api_base": "http://localhost:5005",
 
-    # Room to control by default (must match a room name returned by /zones)
-    "default_room": "",
+    # Room name of the S1 device as it appears in node-sonos-http-api /zones.
+    # The physical S1 device the CR200 connects to over SonosNet.
+    # Supported: Sonos Bridge, Connect, Connect:Amp, Play:1/3/5 Gen 1, PLAYBAR.
+    # The S1 monitor watches this device for CR200-driven state changes.
+    "s1_room_name": "",
+
+    # Room name of the S2 speaker(s) to control.
+    # Must match a room name returned by node-sonos-http-api /zones.
+    "s2_room_name": "",
+
+    # How often (in seconds) to poll the S1 device for state changes.
+    "poll_interval": 1.0,
+
+    # -------------------------------------------------------------------------
+    # UPnP / SSDP — bridge presents itself as a ZonePlayer to the CR200.
+    # The CR200 discovers the bridge alongside the S1 device and uses it for
+    # ContentDirectory browsing (Sonos Favorites, Playlists, music services,
+    # search) — all content is proxied from the configured S2 speaker.
+    # -------------------------------------------------------------------------
+
+    # Stable UUID for the bridge device. The CR200 memorises this UUID after
+    # pairing — do not change it once set, or the CR200 must be re-paired.
+    # Generated automatically by setup.py if absent.
+    "uuid": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+
+    # Sonos Household ID — must match your S2 system's household so the CR200
+    # treats the bridge and S2 speakers as part of the same household.
+    # Auto-discovered from node-sonos-http-api by setup.py.
+    "household_id": "",
+
+    # Friendly name shown on the CR200 display.
+    "friendly_name": "CR200 Bridge",
+
+    # Port for the UPnP HTTP server (device description + SOAP endpoint).
+    # 1400 is the standard Sonos port; requires sudo on Linux for ports < 1024.
+    "http_port": 1400,
 
     # Logging level: DEBUG, INFO, WARNING, ERROR
     "log_level": "INFO",
 
-    # Status web UI port (separate from UPnP port)
+    # Status web UI port
     "status_port": 8080,
 }
 

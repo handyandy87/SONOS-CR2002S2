@@ -1,7 +1,14 @@
 """
-SSDP Server - Broadcasts fake S1 Sonos device presence on the network.
-The CR200 sends UPnP M-SEARCH discovery packets; this responds to them
-so the CR200 can find our "fake" Sonos player and connect.
+SSDP Server
+
+Announces the bridge as a Sonos ZonePlayer on the network so the CR200 can
+discover it alongside the real S1 device.  The CR200 uses the bridge for:
+  - ContentDirectory Browse/Search — proxied to the S2 speaker (port 1400),
+    giving the CR200 access to S2 music services (Spotify, Apple Music, etc.)
+  - AVTransport + RenderingControl SOAP — forwarded to S2 via node-sonos-http-api
+
+The real S1 device (Bridge, Connect, Play:1 Gen 1, etc.) remains on the
+network to provide the SonosNet WiFi beacon that the CR200 connects to.
 """
 
 import socket

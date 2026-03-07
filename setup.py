@@ -17,18 +17,22 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import uuid
+import uuid as _uuid_mod
+
+from discovery import discover_sonos_devices, print_discovered_devices
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_JSON = os.path.join(HERE, "config.json")
 
-# Defaults that mirror the hardcoded dict in config.py
 DEFAULTS = {
-    "uuid": None,               # auto-generated if absent
+    "sonos_http_api_base": "http://localhost:5005",
+    "s1_room_name": "",
+    "s2_room_name": "",
+    "poll_interval": 1.0,
+    "uuid": "",
     "household_id": "",
     "friendly_name": "CR200 Bridge",
     "http_port": 1400,
-    "sonos_http_api_base": "http://localhost:5005",
     "log_level": "INFO",
     "status_port": 8080,
 }
@@ -63,6 +67,26 @@ def prompt_choice(label, choices, default):
         if val.upper() in [c.upper() for c in choices]:
             return val.upper()
         print(f"    Invalid choice. Please enter one of: {choices_str}")
+
+
+def prompt_from_list(label, options, default=""):
+    """Prompt user to pick from a numbered list, or type a name manually."""
+    if options:
+        print(f"    Available rooms:")
+        for i, opt in enumerate(options, 1):
+            print(f"      {i}. {opt}")
+        print(f"    Enter a number or type a room name manually.")
+    val = input(f"  {label} [{default}]: ").strip()
+    if not val:
+        return default
+    # Check if it's a number
+    try:
+        idx = int(val) - 1
+        if 0 <= idx < len(options):
+            return options[idx]
+    except ValueError:
+        pass
+    return val
 
 
 def section(title):
@@ -194,7 +218,6 @@ def ensure_node_api(npm):
 
     warn("node-sonos-http-api not found.")
 
-    # The package is not on the npm registry; it must be installed from GitHub.
     gh_url = "https://github.com/jishi/node-sonos-http-api"
     install_spec = f"{gh_url}"
 
@@ -209,7 +232,6 @@ def ensure_node_api(npm):
         return ""
 
     print("  Installing from GitHub … (this may take a minute)")
-    # Try without sudo first (succeeds if npm prefix is user-writable)
     result = subprocess.run([npm, "install", "-g", install_spec], timeout=300)
     if result.returncode != 0:
         print("  Retrying with sudo …")
@@ -256,7 +278,7 @@ def check_api(api_base, node_api_path=""):
         ok(f"Connected — {len(rooms)} room(s) found: {', '.join(rooms)}")
         if household_id:
             ok(f"Household ID auto-discovered: {household_id}")
-        return household_id, rooms, None   # (hid, rooms, background_proc)
+        return household_id, rooms, None   # (household_id, rooms, background_proc)
 
     warn("Could not reach node-sonos-http-api.")
 
@@ -264,7 +286,7 @@ def check_api(api_base, node_api_path=""):
         print("  Start it with:  node /usr/local/lib/node_modules/sonos-http-api/server.js")
         return None, [], None
 
-    answer = input("  Start it now for speaker discovery? [Y/n] ").strip().lower()
+    answer = input("  Start it now for room discovery? [Y/n] ").strip().lower()
     if answer == "n":
         return None, [], None
 
@@ -273,6 +295,8 @@ def check_api(api_base, node_api_path=""):
         return None, [], None
 
     print("  Waiting for API to start …", end="", flush=True)
+    household_id = None
+    rooms = []
     for _ in range(8):
         time.sleep(1)
         print(".", end="", flush=True)
@@ -287,7 +311,7 @@ def check_api(api_base, node_api_path=""):
             ok(f"Household ID auto-discovered: {household_id}")
         print("  (node-sonos-http-api is running in the background — leave it running.)")
     else:
-        warn("API started but could not discover speakers. Check that your Sonos system is on the same network.")
+        warn("API started but could not discover rooms. Check that your Sonos system is on the same network.")
         proc.terminate()
         proc = None
 
@@ -299,12 +323,10 @@ def check_api(api_base, node_api_path=""):
 # ---------------------------------------------------------------------------
 
 _COMMON_NODE_PATHS = [
-    # GitHub install lands as "sonos-http-api" (no "node-" prefix)
     "/usr/local/lib/node_modules/sonos-http-api/server.js",
     "/usr/lib/node_modules/sonos-http-api/server.js",
     os.path.expanduser("~/.config/yarn/global/node_modules/sonos-http-api/server.js"),
     os.path.expanduser("~/.npm-global/lib/node_modules/sonos-http-api/server.js"),
-    # Legacy / alternate install names kept for compatibility
     "/usr/local/lib/node_modules/node-sonos-http-api/server.js",
     "/usr/lib/node_modules/node-sonos-http-api/server.js",
     os.path.expanduser("~/.config/yarn/global/node_modules/node-sonos-http-api/server.js"),
@@ -314,7 +336,6 @@ _COMMON_NODE_PATHS = [
 
 def find_node_api_path():
     """Try to locate the sonos-http-api server.js automatically."""
-    # Ask node itself — try both module names the package may be registered under
     for module_name in ("sonos-http-api/server.js", "node-sonos-http-api/server.js"):
         try:
             result = subprocess.run(
@@ -338,19 +359,53 @@ def find_node_api_path():
 # Step 5 — Interactive config prompts
 # ---------------------------------------------------------------------------
 
-def configure(existing, discovered_household, api_base_default):
+def configure(existing, rooms, discovered_household):
     section("Configuration")
     print("  Press Enter to keep the current value shown in [brackets].\n")
 
     cfg = {}
 
-    # UUID — keep existing silently (CR200 memorises it); generate if absent
+    # API base URL
+    cfg["sonos_http_api_base"] = prompt(
+        "node-sonos-http-api base URL",
+        existing.get("sonos_http_api_base", DEFAULTS["sonos_http_api_base"]),
+    )
+
+    # S1 room name
+    print()
+    print("  The S1 device is the physical Sonos unit the CR200 connects to over SonosNet.")
+    print("  Supported: Sonos Bridge, Connect, Connect:Amp,")
+    print("             Play:1 Gen 1, Play:3 Gen 1, Play:5 Gen 1")
+    cfg["s1_room_name"] = prompt_from_list(
+        "S1 device room name (as shown in node-sonos-http-api)",
+        rooms,
+        existing.get("s1_room_name", DEFAULTS["s1_room_name"]),
+    )
+
+    # S2 room name
+    print()
+    print("  The S2 room is the speaker(s) the CR200 will browse and control.")
+    print("  ContentDirectory Browse/Search will be proxied from this speaker.")
+    cfg["s2_room_name"] = prompt_from_list(
+        "S2 target room name",
+        rooms,
+        existing.get("s2_room_name", DEFAULTS["s2_room_name"]),
+    )
+
+    # Poll interval
+    cfg["poll_interval"] = float(prompt(
+        "Poll interval (seconds)",
+        existing.get("poll_interval", DEFAULTS["poll_interval"]),
+        hint="How often to check the S1 device for state changes. 1.0 is recommended.",
+    ))
+
+    # UUID — keep existing (CR200 memorises it); generate if absent
     existing_uuid = existing.get("uuid", "")
-    if existing_uuid and existing_uuid != "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d":
+    if existing_uuid and existing_uuid not in ("", "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"):
         cfg["uuid"] = existing_uuid
         ok(f"UUID kept: {existing_uuid}")
     else:
-        cfg["uuid"] = str(uuid.uuid4())
+        cfg["uuid"] = str(_uuid_mod.uuid4())
         ok(f"UUID generated: {cfg['uuid']}")
         print("    (The CR200 memorises this — avoid changing it after pairing.)")
 
@@ -361,9 +416,9 @@ def configure(existing, discovered_household, api_base_default):
         or "Sonos_REPLACE_WITH_YOUR_HOUSEHOLD_ID"
     )
     hid_hint = (
-        "Auto-discovered from your speakers."
+        "Auto-discovered from your S2 speakers."
         if discovered_household
-        else "Not auto-discovered. Find it by running:  curl http://localhost:5005/zones | python3 -m json.tool"
+        else "Not auto-discovered. Find it with:  curl http://localhost:5005/zones | python3 -m json.tool"
     )
     cfg["household_id"] = prompt("Household ID", hid_default, hint=hid_hint)
 
@@ -373,18 +428,12 @@ def configure(existing, discovered_household, api_base_default):
         existing.get("friendly_name", DEFAULTS["friendly_name"]),
     )
 
-    # HTTP port
+    # UPnP HTTP port
     cfg["http_port"] = int(prompt(
         "UPnP HTTP port",
         existing.get("http_port", DEFAULTS["http_port"]),
-        hint="1400 is the standard Sonos port. Ports <1024 need elevated privileges.",
+        hint="1400 is the standard Sonos port. Requires sudo on Linux for ports < 1024.",
     ))
-
-    # API base URL
-    cfg["sonos_http_api_base"] = prompt(
-        "node-sonos-http-api base URL",
-        existing.get("sonos_http_api_base", DEFAULTS["sonos_http_api_base"]),
-    )
 
     # Log level
     cfg["log_level"] = prompt_choice(
@@ -449,7 +498,6 @@ def offer_service_install(node_api_path):
         warn(f"install-service.sh not found at {installer}")
         return
 
-    # Pass node_api_path as env var so install-service.sh can substitute it
     env = os.environ.copy()
     if node_api_path:
         env["NODE_API_PATH"] = node_api_path
@@ -478,7 +526,7 @@ def main():
     check_python()
     node, npm = check_node()
 
-    # Load existing config.json if present (preserves UUID, node_api_path, etc.)
+    # Load existing config.json if present
     existing = {}
     if os.path.isfile(CONFIG_JSON):
         try:
@@ -488,7 +536,7 @@ def main():
         except Exception as e:
             warn(f"Could not read existing config.json: {e}")
 
-    # Ensure node-sonos-http-api is installed; install if missing
+    # Ensure node-sonos-http-api is installed
     node_api_path = existing.get("node_api_path", "") or find_node_api_path()
     if not node_api_path:
         node_api_path = ensure_node_api(npm)
@@ -497,14 +545,22 @@ def main():
     api_base = existing.get("sonos_http_api_base", DEFAULTS["sonos_http_api_base"])
     discovered_household, rooms, _bg_proc = check_api(api_base, node_api_path)
 
-    # Show discovered rooms (informational)
+    # SSDP scan — find Sonos devices and flag S1 units
+    section("Scanning for Sonos devices (SSDP)")
+    print("  Scanning network for Sonos ZonePlayer devices …")
+    ssdp_devices = discover_sonos_devices(timeout=3.0)
+    print_discovered_devices(ssdp_devices)
+
     if rooms:
-        section("Available Sonos rooms")
+        section("Discovered rooms (node-sonos-http-api)")
         for room in rooms:
             print(f"    • {room}")
+        print()
+        print("  Identify which room is your S1 device and which is your S2 speaker.")
+        print("  (S1 devices: Bridge, Connect, Connect:Amp, Play:1/3/5 Gen 1)")
 
     # Walk through config prompts
-    cfg = configure(existing, discovered_household, api_base)
+    cfg = configure(existing, rooms, discovered_household)
 
     # Persist node_api_path so install-service.sh can use it
     if node_api_path:
