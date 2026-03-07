@@ -50,9 +50,7 @@ S1 device (Sonos Bridge / Connect / Play:1 Gen 1 / etc.)
 
 **Bridge host** — any machine on the same LAN:
 - Raspberry Pi wired via Ethernet — **recommended**
-- Mac or Linux laptop/desktop (content browsing works; CR200 pairing requires
-  the host to be able to respond to the CR200's 169.254.x.x link-local address
-  — works reliably on a wired Pi, may fail on Mac Wi-Fi)
+- Mac or Linux laptop/desktop
 
 **S2 speakers** — Era 100/300, Arc, Beam Gen 2, Five, Move 2, etc.
 
@@ -159,8 +157,8 @@ sudo python3 main.py
 
 ### 8. Pair the CR200
 
-Put the CR200 into Wi-Fi setup mode (hold the Dock button until the setup
-screen appears). It will join SonosNet via the S1 device, discover the bridge
+The CR200 will prompt you to initiate pairing from an S1 device. Follow that
+prompt on the S1 device — the CR200 will join SonosNet, discover the bridge
 via UPnP, and pair with it. After pairing:
 
 - **Browsing**: the CR200's ContentDirectory browse/search is served from the
