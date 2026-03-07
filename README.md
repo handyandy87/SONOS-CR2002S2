@@ -52,7 +52,54 @@ Real S2 Speakers
 
 ---
 
-## Setup
+## Getting Started
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/handyandy87/SONOS-CR2002S2.git
+cd SONOS-CR2002S2
+```
+
+### 2. Confirm Python 3.10+
+
+```bash
+python3 --version
+# Python 3.10.x or higher required
+```
+
+On Raspberry Pi OS (Bullseye or later) Python 3.11 is included. On older images:
+
+```bash
+sudo apt update && sudo apt install -y python3
+```
+
+### 3. Run the setup wizard
+
+```bash
+python3 setup.py
+```
+
+The wizard installs Node.js and node-sonos-http-api if they are missing, probes
+your Sonos network, and writes `config.json`. Follow the prompts — pressing Enter
+accepts the suggested default for each field.
+
+### 4. Start the bridge
+
+```bash
+python3 main.py
+# If port 1400 is refused: sudo python3 main.py
+```
+
+### 5. Pair the CR200
+
+Put the CR200 into Wi-Fi setup mode (hold the Dock button until the display shows
+the setup screen). It will discover and join the SonosNet broadcast by your wired
+speaker, then find the bridge via UPnP automatically.
+
+---
+
+## Setup (detailed)
 
 ### Quick start — interactive wizard (recommended)
 
