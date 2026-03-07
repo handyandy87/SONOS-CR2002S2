@@ -137,7 +137,11 @@ class SSDPServer:
                 sock.sendto(response.encode(), addr)
                 logger.debug(f"Sent SSDP response for {device_st} to {addr[0]}")
             except Exception as e:
-                logger.error(f"Failed to send SSDP response: {e}")
+                logger.error(f"Failed to send SSDP response to {addr[0]}: {e}")
+                # Note: if addr[0] is a 169.254.x.x link-local address the send
+                # will always fail when the bridge is on a different network segment
+                # (e.g. Mac on Wi-Fi vs CR200 on SonosNet). Run the bridge on a
+                # Raspberry Pi wired to the same switch as the Sonos speaker.
 
     def _send_notify_loop(self):
         """Periodically broadcast NOTIFY alive packets so CR200 keeps us alive."""
