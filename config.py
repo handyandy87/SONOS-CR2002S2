@@ -26,9 +26,12 @@ BRIDGE_CONFIG = {
     "http_port": 1400,
 
     # node-sonos-http-api base URL
-    # Install: npm install -g node-sonos-http-api
-    # Run:     node-sonos-http-api  (default port 5005)
+    # Install: npm install -g https://github.com/jishi/node-sonos-http-api
+    # Run:     node /usr/local/lib/node_modules/sonos-http-api/server.js
     "sonos_http_api_base": "http://localhost:5005",
+
+    # Room to control by default (must match a room name returned by /zones)
+    "default_room": "",
 
     # Logging level: DEBUG, INFO, WARNING, ERROR
     "log_level": "INFO",
