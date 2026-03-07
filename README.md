@@ -46,6 +46,7 @@ Real S2 Speakers
 
 ### Software
 
+- **Homebrew** (macOS / Linux) — used to install Node.js and Python if not already present
 - **Node.js 14+** and npm
 - **Python 3.10+** (stdlib only — no pip packages needed)
 - Free ports: **1400** TCP, **1900** UDP multicast, **5005** TCP, **8080** TCP
@@ -61,7 +62,27 @@ git clone https://github.com/handyandy87/SONOS-CR2002S2.git
 cd SONOS-CR2002S2
 ```
 
-### 2. Confirm Python 3.10+
+### 2. Install Homebrew (if not already installed)
+
+[Homebrew](https://brew.sh) is a package manager for macOS and Linux that makes it easy to install Node.js, Python, and other dependencies.
+
+**macOS / Linux:**
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+After installation, follow any on-screen instructions to add `brew` to your PATH (the installer will print the exact commands for your shell).
+
+Verify:
+
+```bash
+brew --version
+```
+
+> **Raspberry Pi OS / Debian users:** Homebrew is optional on Linux. You can use `apt` instead (`sudo apt update && sudo apt install -y nodejs npm python3`). If you prefer Homebrew, the install command above works on Linux as well.
+
+### 3. Confirm Python 3.10+
 
 ```bash
 python3 --version
@@ -74,7 +95,7 @@ On Raspberry Pi OS (Bullseye or later) Python 3.11 is included. On older images:
 sudo apt update && sudo apt install -y python3
 ```
 
-### 3. Run the setup wizard
+### 4. Run the setup wizard
 
 ```bash
 python3 setup.py
@@ -84,14 +105,14 @@ The wizard installs Node.js and node-sonos-http-api if they are missing, probes
 your Sonos network, and writes `config.json`. Follow the prompts — pressing Enter
 accepts the suggested default for each field.
 
-### 4. Start the bridge
+### 5. Start the bridge
 
 ```bash
 python3 main.py
 # If port 1400 is refused: sudo python3 main.py
 ```
 
-### 5. Pair the CR200
+### 6. Pair the CR200
 
 Put the CR200 into Wi-Fi setup mode (hold the Dock button until the display shows
 the setup screen). It will discover and join the SonosNet broadcast by your wired
