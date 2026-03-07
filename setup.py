@@ -194,27 +194,31 @@ def ensure_node_api(npm):
 
     warn("node-sonos-http-api not found.")
 
+    # The package is not on the npm registry; it must be installed from GitHub.
+    gh_url = "https://github.com/jishi/node-sonos-http-api"
+    install_spec = f"{gh_url}"
+
     if npm is None:
         print("  npm is not available — cannot install automatically.")
-        print("  Install manually:  sudo npm install -g node-sonos-http-api")
+        print(f"  Install manually:  sudo npm install -g {gh_url}")
         return ""
 
-    answer = input("  Install now? (npm install -g node-sonos-http-api) [Y/n] ").strip().lower()
+    answer = input(f"  Install now? (npm install -g {gh_url}) [Y/n] ").strip().lower()
     if answer == "n":
-        print("  Skipped. Install later:  sudo npm install -g node-sonos-http-api")
+        print(f"  Skipped. Install later:  sudo npm install -g {gh_url}")
         return ""
 
-    print("  Installing … (this may take a minute)")
+    print("  Installing from GitHub … (this may take a minute)")
     # Try without sudo first (succeeds if npm prefix is user-writable)
-    result = subprocess.run([npm, "install", "-g", "node-sonos-http-api"], timeout=300)
+    result = subprocess.run([npm, "install", "-g", install_spec], timeout=300)
     if result.returncode != 0:
         print("  Retrying with sudo …")
         result = subprocess.run(
-            ["sudo", npm, "install", "-g", "node-sonos-http-api"], timeout=300
+            ["sudo", npm, "install", "-g", install_spec], timeout=300
         )
 
     if result.returncode != 0:
-        warn("npm install failed. Try manually:  sudo npm install -g node-sonos-http-api")
+        warn(f"npm install failed. Try manually:  sudo npm install -g {gh_url}")
         return ""
 
     path = find_node_api_path()
@@ -257,7 +261,7 @@ def check_api(api_base, node_api_path=""):
     warn("Could not reach node-sonos-http-api.")
 
     if not node_api_path:
-        print("  Start it with:  node-sonos-http-api")
+        print("  Start it with:  node /usr/local/lib/node_modules/sonos-http-api/server.js")
         return None, [], None
 
     answer = input("  Start it now for speaker discovery? [Y/n] ").strip().lower()
@@ -295,26 +299,33 @@ def check_api(api_base, node_api_path=""):
 # ---------------------------------------------------------------------------
 
 _COMMON_NODE_PATHS = [
-    "/usr/lib/node_modules/node-sonos-http-api/server.js",
+    # GitHub install lands as "sonos-http-api" (no "node-" prefix)
+    "/usr/local/lib/node_modules/sonos-http-api/server.js",
+    "/usr/lib/node_modules/sonos-http-api/server.js",
+    os.path.expanduser("~/.config/yarn/global/node_modules/sonos-http-api/server.js"),
+    os.path.expanduser("~/.npm-global/lib/node_modules/sonos-http-api/server.js"),
+    # Legacy / alternate install names kept for compatibility
     "/usr/local/lib/node_modules/node-sonos-http-api/server.js",
+    "/usr/lib/node_modules/node-sonos-http-api/server.js",
     os.path.expanduser("~/.config/yarn/global/node_modules/node-sonos-http-api/server.js"),
     os.path.expanduser("~/.npm-global/lib/node_modules/node-sonos-http-api/server.js"),
 ]
 
 
 def find_node_api_path():
-    """Try to locate the node-sonos-http-api server.js automatically."""
-    # Ask node itself first
-    try:
-        result = subprocess.run(
-            ["node", "-e", "console.log(require.resolve('node-sonos-http-api/server.js'))"],
-            capture_output=True, text=True, timeout=5,
-        )
-        p = result.stdout.strip()
-        if p and os.path.isfile(p):
-            return p
-    except Exception:
-        pass
+    """Try to locate the sonos-http-api server.js automatically."""
+    # Ask node itself — try both module names the package may be registered under
+    for module_name in ("sonos-http-api/server.js", "node-sonos-http-api/server.js"):
+        try:
+            result = subprocess.run(
+                ["node", "-e", f"console.log(require.resolve('{module_name}'))"],
+                capture_output=True, text=True, timeout=5,
+            )
+            p = result.stdout.strip()
+            if p and os.path.isfile(p):
+                return p
+        except Exception:
+            pass
 
     for p in _COMMON_NODE_PATHS:
         if os.path.isfile(p):

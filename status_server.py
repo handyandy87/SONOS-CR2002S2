@@ -248,7 +248,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             "uptime": uptime_str,
             "command_count": StatusRequestHandler.command_count,
             "upnp_port": BRIDGE_CONFIG["http_port"],
-            "speakers": self.zone_manager.get_speaker_list(),
+            "speakers": self.zone_manager.get_room_list(),
             "log": log_copy,
         }
         self._json_response(data)

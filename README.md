@@ -136,7 +136,7 @@ The wizard walks you through every step interactively:
 |---|---|
 | Python check | Confirms Python 3.10+ is present |
 | Node.js | Detects `node`/`npm`; offers `sudo apt install -y nodejs npm` if missing |
-| node-sonos-http-api | Detects existing install; offers `npm install -g node-sonos-http-api` if missing |
+| node-sonos-http-api | Detects existing install; offers `npm install -g https://github.com/jishi/node-sonos-http-api` if missing |
 | API connectivity | Probes `http://localhost:5005/zones`; offers to start the API in the background if installed but not running |
 | Speaker discovery | Auto-discovers your Household ID and lists all Sonos rooms |
 | Configuration | Prompts for friendly name, ports, log level, etc. — with sensible defaults |
@@ -161,7 +161,8 @@ If you prefer to configure things by hand:
 **1. Install and start node-sonos-http-api**
 
 ```bash
-npm install -g node-sonos-http-api
+# node-sonos-http-api is not on the npm registry — install from GitHub:
+npm install -g https://github.com/jishi/node-sonos-http-api
 node-sonos-http-api
 ```
 

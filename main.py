@@ -13,20 +13,25 @@ Requirements:
   pip install  (no extra Python deps — stdlib only + node-sonos-http-api)
 
 Usage:
-  # Terminal 1
-  node-sonos-http-api
+  # Terminal 1 — start the Sonos HTTP API
+  node /usr/local/lib/node_modules/sonos-http-api/server.js
+  # (or: sudo node ... if port 5005 requires elevation)
 
   # Terminal 2
-  cd bridge && python3 main.py
+  cd SONOS-CR2002S2 && python3 main.py
 """
 
 import logging
+import os
 import signal
 import socket
 import sys
 import time
 
 from config import BRIDGE_CONFIG
+
+# Ensure logs/ exists before any FileHandler is created
+os.makedirs(os.path.join(os.path.dirname(__file__), "logs"), exist_ok=True)
 from sonos_client import SonosClient
 from ssdp_server import SSDPServer
 from upnp_server import UPnPServer
