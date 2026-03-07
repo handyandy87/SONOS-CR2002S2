@@ -22,9 +22,21 @@ Real S2 Speakers
 
 ---
 
-> **WARNING: This project has not been fully tested yet.**
-> All code should be considered unverified until validated against real hardware.
-> See [Testing Prerequisites](#testing-prerequisites) below before use.
+## Platform requirement — Raspberry Pi (or wired Linux host)
+
+**The bridge must run on a Raspberry Pi (or other Linux machine) connected via
+Ethernet to the same switch as your wired Sonos speaker.**
+
+macOS was tested during development and the software layer works, but macOS
+cannot be used for actual CR200 pairing. When the CR200 sends SSDP M-SEARCH
+packets it uses a **169.254.x.x link-local source address** (SonosNet
+addressing). A Mac on Wi-Fi cannot route packets back to that address — the OS
+drops them before they leave the NIC. The SSDP response never arrives, the CR200
+never discovers the bridge, and pairing fails. This is a network topology
+limitation, not a software bug.
+
+A Raspberry Pi wired to the same switch as a Sonos speaker sits on the correct
+network segment and reaches the CR200's link-local address without issue.
 
 ---
 
@@ -32,28 +44,26 @@ Real S2 Speakers
 
 ### Hardware
 
-- **At least one S1-generation Sonos device wired via Ethernet** to your router.
-  The CR200 connects over **SonosNet** — Sonos's proprietary wireless mesh — not
-  standard Wi-Fi. SonosNet is only broadcast when at least one Sonos device is
-  wired; an all-S2 system where every speaker is on Wi-Fi may not broadcast a
-  SonosNet that the CR200 can join.
+- **Raspberry Pi** (any model with Ethernet) — connected via Ethernet cable to
+  the same switch/router as your Sonos speakers.
+- **At least one Sonos device wired via Ethernet** to your router.
+  The CR200 connects over **SonosNet** — Sonos's proprietary 5 GHz wireless
+  mesh — which is only broadcast when at least one speaker is wired. An
+  all-Wi-Fi setup will not broadcast a SonosNet that the CR200 can join.
 
-  > **Note:** This requirement is based on how SonosNet works and has not yet been
-  > fully validated in an S1+S2 mixed environment. If you can confirm behaviour
+  > **Note:** This requirement is based on how SonosNet works and has not yet
+  > been fully validated in an all-S2 environment. If you can confirm behaviour
   > either way, please open an issue.
 
-- A machine (Raspberry Pi etc.) on the **same LAN subnet** as your Sonos speakers
+### Software (installed on the Pi)
 
-### Software
-
-- **Homebrew** (macOS / Linux) — used to install Node.js and Python if not already present
-- **Node.js 14+** and npm
+- **Node.js 18+** and npm
 - **Python 3.10+** (stdlib only — no pip packages needed)
 - Free ports: **1400** TCP, **1900** UDP multicast, **5005** TCP, **8080** TCP
 
 ---
 
-## Getting Started
+## Getting Started (Raspberry Pi)
 
 ### 1. Clone the repo
 
@@ -62,37 +72,35 @@ git clone https://github.com/handyandy87/SONOS-CR2002S2.git
 cd SONOS-CR2002S2
 ```
 
-### 2. Install Homebrew (if not already installed)
-
-[Homebrew](https://brew.sh) is a package manager for macOS and Linux that makes it easy to install Node.js, Python, and other dependencies.
-
-**macOS / Linux:**
+### 2. Install Node.js
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+sudo apt update && sudo apt install -y nodejs npm
+node --version   # should be 18.x or later
+npm --version
 ```
 
-After installation, follow any on-screen instructions to add `brew` to your PATH (the installer will print the exact commands for your shell).
-
-Verify:
+If `apt` gives you an old Node version, install the current LTS via NodeSource:
 
 ```bash
-brew --version
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
 ```
 
-> **Raspberry Pi OS / Debian users:** Homebrew is optional on Linux. You can use `apt` instead (`sudo apt update && sudo apt install -y nodejs npm python3`). If you prefer Homebrew, the install command above works on Linux as well.
+### 3. Install node-sonos-http-api
 
-### 3. Confirm Python 3.10+
+The package is not on the npm registry — install from GitHub:
 
 ```bash
-python3 --version
-# Python 3.10.x or higher required
+sudo npm install -g https://github.com/jishi/node-sonos-http-api
 ```
 
-On Raspberry Pi OS (Bullseye or later) Python 3.11 is included. On older images:
+Find the installed path (you'll need it in step 5):
 
 ```bash
-sudo apt update && sudo apt install -y python3
+find /usr/local/lib/node_modules /usr/lib/node_modules \
+     -name server.js -path "*/sonos-http-api/*" 2>/dev/null
+# Typical result: /usr/local/lib/node_modules/sonos-http-api/server.js
 ```
 
 ### 4. Run the setup wizard
@@ -101,36 +109,50 @@ sudo apt update && sudo apt install -y python3
 python3 setup.py
 ```
 
-The wizard installs Node.js and node-sonos-http-api if they are missing, probes
-your Sonos network, and writes `config.json`. Follow the prompts — pressing Enter
-accepts the suggested default for each field.
+The wizard probes your Sonos network, auto-discovers your Household ID and
+rooms, and writes `config.json`. Follow the prompts — Enter accepts the default
+shown in brackets.
 
-### 5. Start the bridge
+### 5. Start node-sonos-http-api
+
+Open a dedicated terminal (or use `screen`/`tmux`) and run:
 
 ```bash
-python3 main.py
-# If port 1400 is refused: sudo python3 main.py
+node /usr/local/lib/node_modules/sonos-http-api/server.js
 ```
 
-### 6. Pair the CR200
+Verify it can see your speakers:
 
-Put the CR200 into Wi-Fi setup mode (hold the Dock button until the display shows
-the setup screen). It will discover and join the SonosNet broadcast by your wired
-speaker, then find the bridge via UPnP automatically.
+```bash
+curl http://localhost:5005/zones
+# Should return JSON with your Sonos rooms
+```
+
+### 6. Start the bridge
+
+In a second terminal:
+
+```bash
+sudo python3 main.py
+```
+
+`sudo` is required for port 1400 (a privileged port on Linux).
+
+### 7. Pair the CR200
+
+Put the CR200 into Wi-Fi setup mode (hold the Dock button until the display
+shows the setup screen). It will join the SonosNet broadcast by your wired
+speaker, then discover the bridge via UPnP and pair automatically.
 
 ---
 
 ## Setup (detailed)
 
-### Quick start — interactive wizard (recommended)
-
-Run the setup wizard once after cloning the repo:
+### Interactive wizard (recommended)
 
 ```bash
 python3 setup.py
 ```
-
-The wizard walks you through every step interactively:
 
 | Step | What it does |
 |---|---|
@@ -139,37 +161,25 @@ The wizard walks you through every step interactively:
 | node-sonos-http-api | Detects existing install; offers `npm install -g https://github.com/jishi/node-sonos-http-api` if missing |
 | API connectivity | Probes `http://localhost:5005/zones`; offers to start the API in the background if installed but not running |
 | Speaker discovery | Auto-discovers your Household ID and lists all Sonos rooms |
-| Configuration | Prompts for friendly name, ports, log level, etc. — with sensible defaults |
+| Configuration | Prompts for friendly name, ports, default room, log level, etc. |
 | `config.json` | Writes (or updates) the bridge config file |
 | `logs/` | Creates the log directory if absent |
 | Autostart | Optionally installs systemd services for Pi boot launch |
-
-After the wizard finishes, start the bridge:
-
-```bash
-python3 main.py   # may need sudo for port 1400
-```
-
-Then put the CR200 into Wi-Fi setup mode and connect it to your network as normal — it will discover the bridge via UPnP and pair with it.
 
 ---
 
 ### Manual setup (advanced)
 
-If you prefer to configure things by hand:
-
 **1. Install and start node-sonos-http-api**
 
 ```bash
-# node-sonos-http-api is not on the npm registry — install from GitHub:
-npm install -g https://github.com/jishi/node-sonos-http-api
-node-sonos-http-api
+sudo npm install -g https://github.com/jishi/node-sonos-http-api
+node /usr/local/lib/node_modules/sonos-http-api/server.js
 ```
 
 Verify:
 ```bash
 curl http://localhost:5005/zones
-# Should return JSON with your Sonos rooms
 ```
 
 **2. Get your Household ID**
@@ -178,34 +188,39 @@ curl http://localhost:5005/zones
 curl http://localhost:5005/zones | python3 -m json.tool | grep -i household
 ```
 
+If that returns nothing, use the coordinator's UUID from the zones output as
+the household ID.
+
 **3. Create `config.json`**
 
 ```json
 {
-  "uuid": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-  "household_id": "Sonos_REPLACE_ME",
+  "uuid": "generate-with-python3-c-import-uuid-print-uuid.uuid4()",
+  "household_id": "RINCON_xxxxxxxxxxxx",
   "friendly_name": "CR200 Bridge",
   "http_port": 1400,
   "sonos_http_api_base": "http://localhost:5005",
+  "default_room": "Kitchen",
   "status_port": 8080,
   "log_level": "INFO"
 }
 ```
 
+Generate a UUID:
+```bash
+python3 -c "import uuid; print(uuid.uuid4())"
+```
+
 **4. Run the bridge**
 
 ```bash
-mkdir -p logs
-python3 main.py   # may need sudo for port 1400
+sudo python3 main.py
 ```
 
 **5. Connect the CR200**
 
-The CR200 does **not** use standard Wi-Fi — it connects exclusively via **SonosNet**,
-the proprietary mesh network that Sonos S1 speakers coordinate over.
-Ensure at least one wired Sonos speaker has SonosNet enabled; the CR200 will
-join that mesh automatically. Once on SonosNet it will discover the bridge
-via UPnP and pair with it.
+Put the CR200 into Wi-Fi setup mode. It will join SonosNet and discover the
+bridge via UPnP.
 
 ---
 
@@ -239,17 +254,19 @@ switch which room the CR200 controls, and view a log of every command received.
 ## Project Structure
 
 ```
-bridge/
-  main.py            — Entry point
-  config.py          — Edit before running
+SONOS-CR2002S2/
+  main.py            — Entry point; starts all servers
+  config.py          — Default config; overridden by config.json at runtime
+  config.json        — Your local settings (gitignored; written by setup.py)
+  setup.py           — Interactive setup wizard
   sonos_client.py    — node-sonos-http-api wrapper
-  soap_handler.py    — CR200 SOAP → SonosClient
+  soap_handler.py    — CR200 SOAP → SonosClient translation
   didl_builder.py    — DIDL-Lite XML (now-playing + artwork)
-  ssdp_server.py     — Fake S1 UPnP presence (SSDP)
-  upnp_server.py     — UPnP HTTP server
-  status_server.py   — Web UI on port 8080
+  ssdp_server.py     — Fake S1 UPnP presence (SSDP multicast)
+  upnp_server.py     — UPnP HTTP server (port 1400)
+  status_server.py   — Status web UI (port 8080)
 logs/
-  bridge.log
+  bridge.log         — Runtime log (gitignored)
 ```
 
 ---
@@ -284,23 +301,40 @@ This project has **not been fully tested**. Before using or contributing, ensure
 ## Troubleshooting
 
 **CR200 can't find any Wi-Fi network to join**
-The CR200 connects over **SonosNet**, not standard Wi-Fi. SonosNet is only
+The CR200 connects over SonosNet, not standard Wi-Fi. SonosNet is only
 broadcast when at least one Sonos device is wired via Ethernet to your router.
-If your entire system is S2 and wireless, plug one speaker in via cable — the
+If your entire system is Wi-Fi only, plug one speaker in via Ethernet — the
 CR200 should then see the SonosNet SSID during its Wi-Fi setup.
 
-> This behaviour is suspected but not yet fully validated. See the Hardware
-> requirements note above.
+**CR200 discovers SonosNet but doesn't find the bridge**
+Verify the bridge is running on the Pi (`sudo python3 main.py`) and that
+`logs/bridge.log` shows incoming `M-SEARCH` lines from the CR200's IP.
+If it only shows `Failed to send SSDP response to 169.254.x.x` errors, the
+bridge is not running on a host that can reach the CR200's link-local address —
+see the [Platform requirement](#platform-requirement--raspberry-pi-or-wired-linux-host)
+section above.
+
+**Bridge fails to start: "Address already in use" on port 1400**
+Another process is using port 1400. Find and stop it:
+```bash
+sudo lsof -i :1400
+```
 
 **No rooms found on startup**
-Run `curl http://localhost:5005/zones` — if empty, node-sonos-http-api can't
-see your speakers. Ensure it's on the same subnet.
+Run `curl http://localhost:5005/zones`. If it returns an empty array or
+connection refused, node-sonos-http-api is not running or can't see your
+speakers. Ensure both the Pi and your Sonos speakers are on the same LAN subnet.
 
-**CR200 doesn't discover the bridge**
-Port 1400 may need elevated privileges: `sudo python3 main.py`. Check
-`logs/bridge.log` for incoming SSDP M-SEARCH lines.
+**node-sonos-http-api command not found**
+The bare `node-sonos-http-api` binary is not linked after a GitHub install.
+Run it with the full path instead:
+```bash
+node /usr/local/lib/node_modules/sonos-http-api/server.js
+```
 
 **Blank now-playing on CR200 screen**
-Set `log_level: "DEBUG"` and verify `GetPositionInfo` SOAP calls appear in
-the log. Also check `curl http://localhost:5005/<RoomName>/state` returns
-track data.
+Set `log_level: "DEBUG"` in `config.json` and verify `GetPositionInfo` SOAP
+calls appear in `logs/bridge.log`. Also check:
+```bash
+curl http://localhost:5005/<RoomName>/state
+```
