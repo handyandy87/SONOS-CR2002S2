@@ -1,24 +1,30 @@
 # CR200 Bridge
 
 Bridges a **Sonos CR200** remote into an **S2-only** Sonos setup using a
-**real S1 Sonos device** as the network intermediary.
+**real S1 Sonos device** as the SonosNet beacon.
 
-The CR200 pairs with the S1 device natively over SonosNet (as it was designed to).
-The bridge code runs on any machine on the same network — Pi, Mac, or Linux — polls
-the S1 device via **node-sonos-http-api**, and mirrors every CR200-driven action
-(play, pause, volume, skip) to your S2 speakers.
+The CR200 connects to the network over SonosNet (broadcast by the S1 device),
+discovers the bridge via UPnP/SSDP, and uses it for full playback control and
+music service browsing — all content comes from the **S2 speaker's** registered
+services (Spotify, Apple Music, Tidal, local library, favorites, playlists).
 
 ```
-CR200 (SonosNet)
-    │  UPnP/SOAP — native CR200 protocol
-    ▼
-Real S1 Device  (Sonos Bridge / Connect / Connect:Amp / Play:1 Gen 1 / etc.)
+CR200 (SonosNet WiFi via S1 device)
     │
-    │          [Pi / Mac / Linux — this bridge]
-    │          polls S1 state via node-sonos-http-api
-    │          mirrors play / pause / vol / next / prev
-    │                        ↓
-    └─────────────→  S2 Speakers  (Era 100/300, Arc, Beam Gen 2, Five, Move 2, etc.)
+    │  SSDP discovery
+    │  UPnP SOAP port 1400
+    ▼
+Bridge (Pi / Mac / Linux)
+    ├── ContentDirectory Browse/Search ──→ S2 speaker at port 1400
+    │     (music services, library, favorites, playlists)
+    │
+    ├── AVTransport / RenderingControl ──→ S2 via node-sonos-http-api
+    │     (play, pause, stop, next, prev, volume)
+    │
+    └── S1Monitor (fallback) ──→ mirrors CR200→S1 state changes to S2
+
+S1 device (Sonos Bridge / Connect / Play:1 Gen 1 / etc.)
+    └── provides SonosNet WiFi beacon only
 ```
 
 ---
@@ -27,7 +33,7 @@ Real S1 Device  (Sonos Bridge / Connect / Connect:Amp / Play:1 Gen 1 / etc.)
 
 ### Hardware
 
-**S1 device** — one of the following (must be on the same network as your S2 system):
+**S1 device** — one of the following, on the same LAN as your S2 system:
 
 | Device | Notes |
 |---|---|
@@ -36,33 +42,28 @@ Real S1 Device  (Sonos Bridge / Connect / Connect:Amp / Play:1 Gen 1 / etc.)
 | **Sonos Connect:Amp** (ZP120) | Built-in amplifier |
 | **Sonos Play:1 Gen 1** | Compact speaker |
 | **Sonos Play:3 Gen 1** | Mid-size speaker |
-| **Sonos Play:5 Gen 1** | Large speaker (oval shape) |
+| **Sonos Play:5 Gen 1** | Large speaker (oval shape, older design) |
 | **Sonos PLAYBAR** | Soundbar |
 
-> The S1 device must be powered on, connected to your network via Ethernet or
-> Wi-Fi, and **not** updated to S2 firmware. It acts purely as a control
-> intermediary — you don't need to play audio from it.
+> The S1 device must be powered on and on the network. It acts purely as the
+> SonosNet beacon — the CR200's WiFi. You don't need to play audio from it.
 
-**Bridge host** — any machine on the same LAN as the S1 device and S2 speakers:
+**Bridge host** — any machine on the same LAN:
+- Raspberry Pi wired via Ethernet — **recommended**
+- Mac or Linux laptop/desktop (content browsing works; CR200 pairing requires
+  the host to be able to respond to the CR200's 169.254.x.x link-local address
+  — works reliably on a wired Pi, may fail on Mac Wi-Fi)
 
-- Raspberry Pi (any model with Ethernet) — recommended
-- Mac or Linux laptop/desktop
-
-**S2 speakers** — Era 100, Era 300, Arc, Beam Gen 2, Five, Move 2, or any
-other Sonos S2 device.
+**S2 speakers** — Era 100/300, Arc, Beam Gen 2, Five, Move 2, etc.
 
 ---
 
 ### Network
 
 - S1 device, S2 speakers, and bridge host must all be on the **same LAN subnet**.
-- The CR200 connects to the S1 device over **SonosNet** — Sonos's proprietary
-  5 GHz mesh network. SonosNet broadcasts when at least one Sonos device is
-  wired via Ethernet.
-- Multicast to `239.255.255.250` (SSDP/UPnP) must not be filtered by your
-  router or switch.
-- If devices are on **different VLANs**, you will need multicast routing or an
-  SSDP/mDNS proxy (`avahi-daemon` reflector, `udp-proxy-2020`, etc.).
+- SonosNet is only broadcast when at least one Sonos device is wired via Ethernet.
+- Multicast to `239.255.255.250` (SSDP) must not be filtered.
+- Port **1400** TCP must be open on the bridge host (UPnP server for CR200 SOAP).
 
 ---
 
@@ -70,7 +71,7 @@ other Sonos S2 device.
 
 - **Node.js 18+** and npm
 - **Python 3.10+** (stdlib only — no pip packages needed)
-- Free ports: **5005** TCP, **8080** TCP
+- Free ports: **1400** TCP (UPnP), **5005** TCP (node-sonos-http-api), **8080** TCP (status UI)
 
 ---
 
@@ -83,14 +84,14 @@ git clone https://github.com/handyandy87/SONOS-CR2002S2.git
 cd SONOS-CR2002S2
 ```
 
-### 2. Install Node.js (if needed)
+### 2. Install Node.js (Raspberry Pi)
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
 node --version   # should be 18.x or later
 ```
 
-If `apt` gives you an old Node version, install the current LTS via NodeSource:
+For older distros, install via NodeSource:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
@@ -111,16 +112,15 @@ Open a dedicated terminal (or use `screen`/`tmux`):
 node /usr/local/lib/node_modules/sonos-http-api/server.js
 ```
 
-Verify it can see your speakers (both S1 and S2 devices should appear):
+Verify it can see your speakers:
 
 ```bash
 curl http://localhost:5005/zones
 ```
 
-### 5. Discover your S1 device
+Both S1 and S2 devices should appear.
 
-Run the discovery utility to see all Sonos devices on the network and
-identify which one is your S1 device:
+### 5. Discover your S1 device
 
 ```bash
 python3 -c "from discovery import discover_sonos_devices, print_discovered_devices; print_discovered_devices(discover_sonos_devices())"
@@ -135,7 +135,7 @@ Example output:
     192.168.1.56     Sonos Arc                       "TV Room"
 ```
 
-Note the **room names** — you'll need them in the next step.
+Note the **room names** shown in quotes — you'll need them in the next step.
 
 ### 6. Run the setup wizard
 
@@ -143,82 +143,47 @@ Note the **room names** — you'll need them in the next step.
 python3 setup.py
 ```
 
-The wizard will:
-- Run an SSDP scan to show discovered S1 and S2 devices
-- List all rooms from node-sonos-http-api
-- Prompt you to select your S1 device room and your S2 target room
-- Write `config.json`
+The wizard:
+- Runs an SSDP scan to show S1 and S2 devices
+- Lists rooms from node-sonos-http-api
+- Prompts for your S1 room, S2 target room, friendly name, UUID, etc.
+- Writes `config.json`
 
 ### 7. Start the bridge
 
 ```bash
-python3 main.py
+sudo python3 main.py
 ```
 
-No `sudo` required — the bridge no longer listens on privileged ports.
+`sudo` is required on Linux for port 1400 (UPnP server for the CR200).
 
 ### 8. Pair the CR200
 
 Put the CR200 into Wi-Fi setup mode (hold the Dock button until the setup
-screen appears). It will join the SonosNet broadcast by the S1 device and
-pair with it. Once paired, any playback commands on the CR200 are mirrored
-to your S2 speakers by the bridge.
+screen appears). It will join SonosNet via the S1 device, discover the bridge
+via UPnP, and pair with it. After pairing:
+
+- **Browsing**: the CR200's ContentDirectory browse/search is served from the
+  S2 speaker — it will see the S2's registered music services, favorites,
+  playlists, and local library.
+- **Playback**: play/pause/vol/skip commands are forwarded to the S2 speaker.
 
 ---
 
-## Setup (detailed)
+## Configuration reference (`config.json`)
 
-### Interactive wizard (recommended)
-
-```bash
-python3 setup.py
-```
-
-| Step | What it does |
-|---|---|
-| Python check | Confirms Python 3.10+ is present |
-| Node.js | Detects `node`/`npm`; offers `sudo apt install` if missing |
-| node-sonos-http-api | Detects existing install; offers npm install if missing |
-| SSDP scan | Scans the network and labels S1 vs S2 devices |
-| API connectivity | Probes `http://localhost:5005/zones`; offers to start the API if not running |
-| Room selection | Lists all discovered rooms; prompts for S1 room and S2 target room |
-| `config.json` | Writes the bridge config file |
-| `logs/` | Creates the log directory if absent |
-| Autostart | Optionally installs systemd services for Pi boot launch |
-
-### Manual setup (advanced)
-
-**1. Install and start node-sonos-http-api**
-
-```bash
-sudo npm install -g https://github.com/jishi/node-sonos-http-api
-node /usr/local/lib/node_modules/sonos-http-api/server.js
-```
-
-**2. Find your room names**
-
-```bash
-curl http://localhost:5005/zones | python3 -m json.tool | grep roomName
-```
-
-**3. Create `config.json`**
-
-```json
-{
-  "sonos_http_api_base": "http://localhost:5005",
-  "s1_room_name": "Bridge",
-  "s2_room_name": "Living Room",
-  "poll_interval": 1.0,
-  "log_level": "INFO",
-  "status_port": 8080
-}
-```
-
-**4. Run the bridge**
-
-```bash
-python3 main.py
-```
+| Key | Description | Default |
+|---|---|---|
+| `sonos_http_api_base` | node-sonos-http-api URL | `http://localhost:5005` |
+| `s1_room_name` | Room name of the S1 device | `""` |
+| `s2_room_name` | Room name of the S2 speaker | `""` |
+| `poll_interval` | S1 state poll rate in seconds | `1.0` |
+| `uuid` | Stable UUID for the bridge (memorised by CR200) | auto-generated |
+| `household_id` | Sonos household ID (must match S2 system) | auto-discovered |
+| `friendly_name` | Name shown on the CR200 display | `CR200 Bridge` |
+| `http_port` | UPnP HTTP server port | `1400` |
+| `log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | `INFO` |
+| `status_port` | Status web UI port | `8080` |
 
 ---
 
@@ -226,27 +191,40 @@ python3 main.py
 
 | Feature | Status |
 |---|---|
-| Play / Pause / Stop mirrored from CR200 → S2 | ✅ |
-| Volume changes mirrored | ✅ |
-| Mute / Unmute mirrored | ✅ |
-| Next / Previous track mirrored | ✅ |
-| Large track jump (seek to track N) mirrored | ✅ |
-| SSDP-based S1 device discovery | ✅ |
-| Status web UI — live room list, now-playing, command log | ✅ |
-| Status web UI — playback controls (play/pause/vol/next/prev) | ✅ |
-| Status web UI — Sonos Favorites and Playlists browser | ✅ |
-| Configurable poll interval | ✅ |
+| CR200 discovers bridge via SSDP | ✅ |
+| CR200 ContentDirectory Browse → S2 speaker (music services, library) | ✅ |
+| CR200 ContentDirectory Search → S2 speaker | ✅ |
+| CR200 Favorites browse → S2 favorites | ✅ |
+| CR200 Playlists browse → S2 playlists | ✅ |
+| CR200 Queue browse → S2 active queue | ✅ |
+| CR200 Play / Pause / Stop / Next / Prev → S2 | ✅ |
+| CR200 Volume, Mute → S2 | ✅ |
+| CR200 Seek by time / track number → S2 | ✅ |
+| CR200 Shuffle / Repeat modes → S2 | ✅ |
+| CR200 Now Playing (title, artist, album, artwork) | ✅ |
+| S1 Monitor — mirrors CR200→S1 commands to S2 (fallback) | ✅ |
+| SSDP-based S1 device discovery in setup.py and on misconfiguration | ✅ |
+| Status web UI — live room list, now-playing | ✅ |
+| Status web UI — playback controls (play/pause/stop/next/prev/vol) | ✅ |
+| Status web UI — Favorites and Playlists browser | ✅ |
+| Status web UI — S2 ContentDirectory tree browser (breadcrumbs) | ✅ |
+| Status web UI — S2 ContentDirectory search | ✅ |
 | Systemd service install (Pi autostart) | ✅ |
 
 ---
 
 ## Status UI
 
-Open `http://<host-ip>:8080` in a browser to:
+Open `http://<host-ip>:8080` in a browser:
+
 - See all discovered rooms and current playback state
-- Control S2 playback directly (play, pause, next, previous, volume)
-- Browse and play Sonos Favorites and Playlists
-- View a live log of every synced command
+- Select which S2 room the web UI controls
+- Basic playback controls (play, pause, stop, next, prev, volume)
+- Browse Favorites and Playlists
+- **S2 Library & Services tab**: full tree browser of the S2 speaker's
+  ContentDirectory — navigate music services (Spotify, Apple Music, Tidal,
+  local library) with breadcrumb navigation, and play any item directly
+- Search the S2's registered music services from the same tab
 
 ---
 
@@ -254,78 +232,69 @@ Open `http://<host-ip>:8080` in a browser to:
 
 ```
 SONOS-CR2002S2/
-  main.py            — Entry point; starts all components
+  main.py            — Entry point; starts all servers
   config.py          — Default config; overridden by config.json at runtime
   config.json        — Your local settings (gitignored; written by setup.py)
   setup.py           — Interactive setup wizard
-  discovery.py       — SSDP-based Sonos device scanner (identifies S1 devices)
+  discovery.py       — SSDP-based Sonos device scanner (labels S1 vs S2)
   s1_monitor.py      — Polls S1 device state; mirrors CR200 commands to S2
-  sonos_client.py    — node-sonos-http-api wrapper (room list + playback control)
+  soap_handler.py    — CR200 SOAP → S2 actions; ContentDirectory proxy
+  ssdp_server.py     — Announces bridge as ZonePlayer (CR200 discovery)
+  upnp_server.py     — UPnP HTTP server (port 1400); routes SOAP to handler
+  sonos_client.py    — node-sonos-http-api wrapper (room list + control)
   didl_builder.py    — DIDL-Lite XML helpers
-  status_server.py   — Status web UI (port 8080)
+  status_server.py   — Status web UI (port 8080) with S2 content browser
 logs/
   bridge.log         — Runtime log (gitignored)
-```
-
-The following files are kept for reference but are **not used** in the current
-S1-device-based architecture (they were needed when the bridge faked an S1 device):
-
-```
-  ssdp_server.py     — (legacy) fake SSDP broadcaster
-  upnp_server.py     — (legacy) fake UPnP HTTP server
-  soap_handler.py    — (legacy) CR200 SOAP command handler
 ```
 
 ---
 
 ## Troubleshooting
 
-**CR200 can't find any Wi-Fi network to join**
-The CR200 connects over SonosNet, not standard Wi-Fi. SonosNet is only broadcast
-when at least one Sonos device is wired via Ethernet. Plug the S1 device (or any
-Sonos speaker) into Ethernet — the CR200 should then see the SonosNet SSID.
+**CR200 can't find any Wi-Fi network**
+The CR200 uses SonosNet, not standard Wi-Fi. Plug the S1 device (or any
+Sonos speaker) into Ethernet — SonosNet only broadcasts when a device is wired.
 
-**S1 room not found at startup**
-Run `curl http://localhost:5005/zones` and confirm the S1 device appears.
-Verify the `s1_room_name` in `config.json` exactly matches the room name in the
-API output (case-sensitive). Also check that the S1 device is powered on.
+**CR200 discovers SonosNet but doesn't find the bridge**
+Verify the bridge is running (`sudo python3 main.py`) and that `logs/bridge.log`
+shows incoming `M-SEARCH` lines. If it shows `Failed to send SSDP response to
+169.254.x.x`, the bridge host cannot reach the CR200's link-local address —
+run the bridge on a Pi wired to the same switch as the S1 device.
 
-**Commands aren't reaching S2**
-Set `log_level: "DEBUG"` in `config.json` and check `logs/bridge.log` for
-`CR200 → S1` lines. If you see state changes detected but S2 commands failing,
-verify the `s2_room_name` in `config.json` matches exactly.
+**CR200 pairs but ContentDirectory is empty / "no items"**
+Check that `s2_room_name` in `config.json` exactly matches the room name in
+`curl http://localhost:5005/zones`. Set `log_level: "DEBUG"` and look for
+`S2 Browse failed` lines in `logs/bridge.log`.
 
-**Bridge fails to start: missing s1_room_name or s2_room_name**
-Run `python3 setup.py` to configure the bridge. On misconfiguration, the bridge
-will also run an SSDP scan and log any S1 devices it finds.
+**Bridge fails to start: "Address already in use" on port 1400**
+```bash
+sudo lsof -i :1400
+```
 
 **No rooms found on startup**
-Run `curl http://localhost:5005/zones`. If it returns an empty array or
-connection refused, node-sonos-http-api is not running or can't see your speakers.
-
-**node-sonos-http-api command not found**
-The bare binary is not linked after a GitHub install. Run with full path:
 ```bash
-node /usr/local/lib/node_modules/sonos-http-api/server.js
+curl http://localhost:5005/zones
 ```
+If empty or connection refused, node-sonos-http-api is not running.
 
 ---
 
 ## Testing Prerequisites
 
-This project has **not been fully tested**. Before using or contributing,
-ensure the following conditions are met.
+This project has **not been fully tested**. Validate against real hardware.
 
 ### Required Hardware
 
 - A real **S1 Sonos device** (see table above) powered on and on the network
 - At least one **S2 speaker** reachable by node-sonos-http-api
-- A **CR200** to test with
+- A **CR200** with working SonosNet connectivity to the S1 device
 
 ### What Still Needs Testing
 
-- [ ] End-to-end CR200 → S1 device → S2 speaker command flow
-- [ ] Volume mirroring accuracy
-- [ ] Next/previous detection via track number delta
+- [ ] End-to-end CR200 ContentDirectory browse of Spotify, Apple Music, etc.
+- [ ] CR200 search returning results from S2 music services
+- [ ] Volume / seek mirroring accuracy
+- [ ] Multiple S2 speakers in a group (zone coordinator selection)
+- [ ] Bridge restart while CR200 is active (reconnection)
 - [ ] Behaviour when S1 device is temporarily unreachable
-- [ ] Multiple S2 speakers in a group

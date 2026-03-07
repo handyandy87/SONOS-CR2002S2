@@ -1,22 +1,27 @@
 """
 Status Server
-Serves a web UI on a separate port (default 8080) with:
+Serves a web UI on port 8080 with:
   - Bridge health / uptime
-  - Discovered rooms (S1 + S2)
-  - Active S2 room selection
-  - Playback controls — play, pause, next, previous, volume
+  - Discovered rooms (S1 + S2) with active-room selection
+  - Playback controls — play, pause, stop, next, previous, volume
   - Sonos Favorites and Playlists browser
-  - Music services browser + search (Spotify, Apple Music, etc.)
+  - S2 ContentDirectory browser (tree navigation of the S2 speaker's music
+    services — Spotify, Apple Music, Tidal, local library, etc.)
+  - S2 ContentDirectory search
   - Recent command log
   - Manual rediscovery trigger
 """
 
-import threading
-import logging
+import html as _html
 import json
+import logging
+import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.request
+import xml.etree.ElementTree as ET
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
+
 from config import BRIDGE_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,7 @@ logger = logging.getLogger(__name__)
 _command_log: list[dict] = []
 _command_log_lock = threading.Lock()
 MAX_LOG_ENTRIES = 50
+
 
 def log_command(action: str, params: dict, speaker: str):
     with _command_log_lock:
@@ -37,6 +43,156 @@ def log_command(action: str, params: dict, speaker: str):
         if len(_command_log) > MAX_LOG_ENTRIES:
             _command_log.pop(0)
 
+
+# ---------------------------------------------------------------------------
+# S2 ContentDirectory proxy helpers
+# (duplicated here so status_server has no import dependency on soap_handler)
+# ---------------------------------------------------------------------------
+
+_CD_NS = "urn:schemas-upnp-org:service:ContentDirectory:1"
+_DIDL_NS = "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
+
+
+def _s2_browse(ip: str, object_id: str,
+               start: int = 0, count: int = 200) -> list[dict]:
+    """
+    Proxy a ContentDirectory Browse to the S2 speaker at <ip>:1400.
+    Returns a list of items with keys: id, title, artist, album, upnp_class,
+    uri, artwork, is_container.
+    """
+    soap = (
+        '<?xml version="1.0"?>'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+        ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        "<s:Body>"
+        f'<u:Browse xmlns:u="{_CD_NS}">'
+        f"<ObjectID>{_html.escape(object_id)}</ObjectID>"
+        "<BrowseFlag>BrowseDirectChildren</BrowseFlag>"
+        "<Filter>*</Filter>"
+        f"<StartingIndex>{start}</StartingIndex>"
+        f"<RequestedCount>{count}</RequestedCount>"
+        "<SortCriteria></SortCriteria>"
+        "</u:Browse>"
+        "</s:Body>"
+        "</s:Envelope>"
+    )
+    req = urllib.request.Request(
+        f"http://{ip}:1400/MediaServer/ContentDirectory/Control",
+        data=soap.encode(),
+        headers={
+            "Content-Type": "text/xml; charset=utf-8",
+            "SOAPACTION": f'"{_CD_NS}#Browse"',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        logger.warning(f"S2 Browse failed for '{object_id}': {e}")
+        return []
+    return _parse_didl_response(raw)
+
+
+def _s2_search(ip: str, criteria: str,
+               start: int = 0, count: int = 100) -> list[dict]:
+    """Proxy a ContentDirectory Search to the S2 speaker."""
+    soap = (
+        '<?xml version="1.0"?>'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+        ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        "<s:Body>"
+        f'<u:Search xmlns:u="{_CD_NS}">'
+        "<ContainerID>0</ContainerID>"
+        f"<SearchCriteria>{_html.escape(criteria)}</SearchCriteria>"
+        "<Filter>*</Filter>"
+        f"<StartingIndex>{start}</StartingIndex>"
+        f"<RequestedCount>{count}</RequestedCount>"
+        "<SortCriteria></SortCriteria>"
+        "</u:Search>"
+        "</s:Body>"
+        "</s:Envelope>"
+    )
+    req = urllib.request.Request(
+        f"http://{ip}:1400/MediaServer/ContentDirectory/Control",
+        data=soap.encode(),
+        headers={
+            "Content-Type": "text/xml; charset=utf-8",
+            "SOAPACTION": f'"{_CD_NS}#Search"',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        logger.warning(f"S2 Search failed: {e}")
+        return []
+    return _parse_didl_response(raw)
+
+
+def _parse_didl_response(soap_xml: str) -> list[dict]:
+    """Extract items from a ContentDirectory SOAP response."""
+    try:
+        root = ET.fromstring(soap_xml)
+    except ET.ParseError:
+        return []
+
+    didl_text = ""
+    for el in root.iter():
+        local = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+        if local in ("Result", "r") and el.text:
+            didl_text = el.text
+            break
+
+    if not didl_text:
+        return []
+
+    try:
+        didl = ET.fromstring(didl_text)
+    except ET.ParseError:
+        return []
+
+    items = []
+    for el in didl:
+        local = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+        upnp_class = _didl_text(el, "class") or ""
+        is_container = local == "container" or "container" in upnp_class.lower()
+        uri = el.get("restricted", "")  # fallback
+        # Preferred: <res> element
+        for res_el in el:
+            if res_el.tag.split("}")[-1] == "res" and res_el.text:
+                uri = res_el.text
+                break
+        art = ""
+        for art_el in el:
+            art_tag = art_el.tag.split("}")[-1] if "}" in art_el.tag else art_el.tag
+            if "albumArtURI" in art_tag and art_el.text:
+                art = art_el.text
+                break
+        items.append({
+            "id":           el.get("id", ""),
+            "parent_id":    el.get("parentID", ""),
+            "title":        _didl_text(el, "title") or "(untitled)",
+            "artist":       _didl_text(el, "artist") or _didl_text(el, "creator") or "",
+            "album":        _didl_text(el, "album") or "",
+            "upnp_class":   upnp_class,
+            "uri":          uri,
+            "artwork":      art,
+            "is_container": is_container,
+        })
+    return items
+
+
+def _didl_text(el: ET.Element, tag: str) -> str:
+    for child in el:
+        local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if local == tag and child.text:
+            return child.text
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# HTML / JavaScript
+# ---------------------------------------------------------------------------
 
 STATUS_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -58,9 +214,9 @@ STATUS_HTML = r"""<!DOCTYPE html>
               color: #555; margin-bottom: 12px; }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
                 margin-right: 6px; }
-  .dot-green { background: #22c55e; }
+  .dot-green  { background: #22c55e; }
   .dot-yellow { background: #eab308; }
-  .dot-red { background: #ef4444; }
+  .dot-red    { background: #ef4444; }
   .speaker { display: flex; align-items: center; justify-content: space-between;
              padding: 10px 12px; background: #111; border-radius: 8px; margin-bottom: 8px;
              border: 1px solid #222; cursor: pointer; transition: border-color 0.15s; }
@@ -73,7 +229,6 @@ STATUS_HTML = r"""<!DOCTYPE html>
   .badge-play  { background: #14532d; color: #4ade80; }
   .badge-pause { background: #1c1c00; color: #facc15; }
   .badge-stop  { background: #1f1f1f; color: #555; }
-  /* Playback controls */
   .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
   .ctrl-btn { background: #222; border: 1px solid #333; color: #ccc; border-radius: 7px;
               padding: 8px 16px; font-size: 1rem; cursor: pointer; transition: background 0.12s; }
@@ -83,35 +238,44 @@ STATUS_HTML = r"""<!DOCTYPE html>
   .vol-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   .vol-row input[type=range] { flex: 1; accent-color: #3b82f6; }
   .vol-label { font-size: 0.8rem; color: #666; min-width: 36px; text-align: right; }
-  /* Tabs */
   .tab-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
   .tab { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;
          padding: 5px 12px; font-size: 0.78rem; cursor: pointer; color: #888; }
   .tab.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
-  /* Media items */
   .media-item { display: flex; align-items: center; justify-content: space-between;
                 padding: 8px 10px; background: #111; border-radius: 7px; margin-bottom: 6px;
                 border: 1px solid #222; gap: 8px; }
-  .media-item-title { font-size: 0.85rem; flex: 1; }
-  .media-item-meta  { font-size: 0.72rem; color: #666; }
+  .media-item-title { font-size: 0.85rem; flex: 1; min-width: 0; white-space: nowrap;
+                      overflow: hidden; text-overflow: ellipsis; }
+  .media-item-meta  { font-size: 0.72rem; color: #666; white-space: nowrap; overflow: hidden;
+                      text-overflow: ellipsis; }
+  .media-item-thumb { width: 36px; height: 36px; border-radius: 4px; object-fit: cover;
+                      flex-shrink: 0; }
   .play-btn { background: #14532d; color: #4ade80; border: none; border-radius: 5px;
               padding: 4px 10px; font-size: 0.78rem; cursor: pointer; flex-shrink: 0; }
   .play-btn:hover { background: #166534; }
-  /* Search */
+  .browse-btn { background: #1e3a5f; color: #60a5fa; border: none; border-radius: 5px;
+                padding: 4px 10px; font-size: 0.78rem; cursor: pointer; flex-shrink: 0; }
+  .browse-btn:hover { background: #1d4ed8; }
+  /* Breadcrumbs */
+  .breadcrumb { display: flex; align-items: center; gap: 4px; margin-bottom: 10px;
+                flex-wrap: wrap; font-size: 0.8rem; }
+  .crumb { color: #3b82f6; cursor: pointer; }
+  .crumb:hover { text-decoration: underline; }
+  .crumb-sep { color: #444; }
+  .crumb-cur { color: #e0e0e0; }
+  /* Search row */
   .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
   .search-row input { flex: 1; background: #111; border: 1px solid #333; color: #e0e0e0;
                       border-radius: 6px; padding: 7px 10px; font-size: 0.85rem; }
   .search-row input:focus { outline: none; border-color: #3b82f6; }
   .search-row button { background: #1d4ed8; color: #fff; border: none; border-radius: 6px;
                        padding: 7px 14px; font-size: 0.85rem; cursor: pointer; }
-  .service-select { background: #111; border: 1px solid #333; color: #e0e0e0;
-                    border-radius: 6px; padding: 7px 10px; font-size: 0.85rem; }
-  /* Log */
   .log-entry { font-size: 0.78rem; padding: 6px 0; border-bottom: 1px solid #1f1f1f;
                display: flex; gap: 10px; }
   .log-time   { color: #444; min-width: 56px; }
   .log-action { color: #60a5fa; min-width: 160px; }
-  .log-speaker{ color: #a78bfa; }
+  .log-speaker { color: #a78bfa; }
   .btn { display: inline-block; padding: 8px 14px; border-radius: 7px; border: none;
          font-size: 0.82rem; cursor: pointer; font-weight: 500; margin-top: 12px; }
   .btn-primary { background: #1d4ed8; color: #fff; }
@@ -162,26 +326,21 @@ STATUS_HTML = r"""<!DOCTYPE html>
   <div class="tab-row">
     <button class="tab active" id="tab-fav"  onclick="showTab('fav')">Favorites</button>
     <button class="tab"        id="tab-pl"   onclick="showTab('pl')">Playlists</button>
-    <button class="tab"        id="tab-svc"  onclick="showTab('svc')">Services</button>
+    <button class="tab"        id="tab-s2"   onclick="showTab('s2')">S2 Library &amp; Services</button>
   </div>
 
   <!-- Favorites & Playlists list -->
   <div id="media-list"></div>
 
-  <!-- Services search (hidden until "Services" tab active) -->
-  <div id="svc-panel" style="display:none">
+  <!-- S2 ContentDirectory browser -->
+  <div id="s2-panel" style="display:none">
     <div class="search-row">
-      <select class="service-select" id="svc-select">
-        <option value="spotify">Spotify</option>
-        <option value="apple">Apple Music</option>
-        <option value="tidal">Tidal</option>
-        <option value="library">Local Library</option>
-      </select>
-      <input type="text" id="svc-query" placeholder="Search songs, artists, albums&hellip;"
-             onkeydown="if(event.key==='Enter') searchService()">
-      <button onclick="searchService()">Search</button>
+      <input type="text" id="s2-query" placeholder="Search S2 music services&hellip;"
+             onkeydown="if(event.key==='Enter') searchS2()">
+      <button onclick="searchS2()">Search</button>
     </div>
-    <div id="svc-results"></div>
+    <div class="breadcrumb" id="s2-breadcrumb"></div>
+    <div id="s2-items"><p style="color:#666;font-size:0.85rem">Select a room first, then browse.</p></div>
   </div>
 </div>
 
@@ -193,6 +352,9 @@ STATUS_HTML = r"""<!DOCTYPE html>
 <script>
 let activeRoom = null;
 let currentTab = 'fav';
+
+// S2 browser state
+let s2Stack = []; // [{id, title}, ...]  — breadcrumb stack
 
 // ---- Status polling ----
 
@@ -247,7 +409,7 @@ function renderStatus(data) {
       const slider = document.getElementById('vol-slider');
       const label  = document.getElementById('vol-label');
       if (document.activeElement !== slider) {
-        slider.value    = active.volume;
+        slider.value      = active.volume;
         label.textContent = active.volume;
       }
       const np = active.track
@@ -280,6 +442,7 @@ async function setActive(name) {
     body: JSON.stringify({name})
   });
   fetchStatus();
+  if (currentTab === 's2') browseS2('0', 'S2 Library & Services');
 }
 
 async function rediscover() {
@@ -304,16 +467,20 @@ async function setVol(vol) {
   });
 }
 
-// ---- Music browser ----
+// ---- Music tabs ----
 
 function showTab(tab) {
   currentTab = tab;
-  ['fav','pl','svc'].forEach(t => {
+  ['fav','pl','s2'].forEach(t => {
     document.getElementById('tab-' + t).className = 'tab' + (t === tab ? ' active' : '');
   });
-  document.getElementById('media-list').style.display = tab !== 'svc' ? '' : 'none';
-  document.getElementById('svc-panel').style.display  = tab === 'svc' ? '' : 'none';
-  if (tab !== 'svc') loadMedia();
+  document.getElementById('media-list').style.display = tab !== 's2' ? '' : 'none';
+  document.getElementById('s2-panel').style.display   = tab === 's2' ? '' : 'none';
+  if (tab !== 's2') {
+    loadMedia();
+  } else {
+    if (activeRoom) browseS2('0', 'S2 Library & Services');
+  }
 }
 
 async function loadMedia() {
@@ -329,7 +496,7 @@ async function loadMedia() {
     }
     el.innerHTML = items.map((item, i) => `
       <div class="media-item">
-        <div>
+        <div style="min-width:0;flex:1">
           <div class="media-item-title">${item.title || item.name || '(untitled)'}</div>
           ${item.type ? `<div class="media-item-meta">${item.type}</div>` : ''}
         </div>
@@ -350,50 +517,133 @@ async function playMedia(type, index) {
   setTimeout(fetchStatus, 1000);
 }
 
-// ---- Music service search ----
+// ---- S2 ContentDirectory browser ----
 
-async function searchService() {
-  const service = document.getElementById('svc-select').value;
-  const query   = document.getElementById('svc-query').value.trim();
+async function browseS2(objectId, title, pushStack=true) {
+  if (!activeRoom) {
+    document.getElementById('s2-items').innerHTML =
+      '<p style="color:#666;font-size:0.85rem">Select a room above first.</p>';
+    return;
+  }
+
+  if (pushStack) {
+    if (objectId === '0') {
+      s2Stack = [{id: '0', title: 'S2 Library & Services'}];
+    } else {
+      // Remove any existing entry with this id (avoid duplicates on back-nav)
+      s2Stack = s2Stack.filter(c => c.id !== objectId);
+      s2Stack.push({id: objectId, title});
+    }
+  }
+
+  renderBreadcrumb();
+
+  const el = document.getElementById('s2-items');
+  el.innerHTML = '<p style="color:#666;font-size:0.85rem">Loading\u2026</p>';
+
+  try {
+    const r = await fetch(`/api/browse?id=${encodeURIComponent(objectId)}&room=${encodeURIComponent(activeRoom)}`);
+    const items = await r.json();
+    if (!Array.isArray(items) || !items.length) {
+      el.innerHTML = '<p style="color:#666;font-size:0.85rem">No items found.</p>';
+      return;
+    }
+    el.innerHTML = items.map(item => {
+      const thumb = item.artwork
+        ? `<img class="media-item-thumb" src="${item.artwork}" onerror="this.style.display='none'">`
+        : '';
+      const meta = [item.artist, item.album].filter(Boolean).join(' \u00b7 ');
+      const actions = item.is_container
+        ? `<button class="browse-btn" onclick='browseS2(${JSON.stringify(item.id)}, ${JSON.stringify(item.title)})'>Browse &#9656;</button>`
+        : `<button class="play-btn" onclick='playS2Item(${JSON.stringify(item.uri)}, ${JSON.stringify(item.title)})'>&#9654; Play</button>`;
+      return `
+        <div class="media-item">
+          ${thumb}
+          <div style="min-width:0;flex:1">
+            <div class="media-item-title">${esc(item.title)}</div>
+            ${meta ? `<div class="media-item-meta">${esc(meta)}</div>` : ''}
+          </div>
+          ${actions}
+        </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<p style="color:#666;font-size:0.85rem">Browse error.</p>';
+  }
+}
+
+function renderBreadcrumb() {
+  const el = document.getElementById('s2-breadcrumb');
+  el.innerHTML = s2Stack.map((c, i) => {
+    const isLast = i === s2Stack.length - 1;
+    const sep = i > 0 ? '<span class="crumb-sep"> / </span>' : '';
+    if (isLast) return `${sep}<span class="crumb-cur">${esc(c.title)}</span>`;
+    return `${sep}<span class="crumb" onclick='navToStack(${i})'>${esc(c.title)}</span>`;
+  }).join('');
+}
+
+function navToStack(index) {
+  s2Stack = s2Stack.slice(0, index + 1);
+  const target = s2Stack[index];
+  browseS2(target.id, target.title, false);
+}
+
+async function searchS2() {
+  const query = document.getElementById('s2-query').value.trim();
   if (!query) return;
   if (!activeRoom) { alert('Select a room first.'); return; }
 
-  const el = document.getElementById('svc-results');
+  s2Stack = [{id: '_search_', title: `Search: "${query}"`}];
+  renderBreadcrumb();
+
+  const el = document.getElementById('s2-items');
   el.innerHTML = '<p style="color:#666;font-size:0.85rem">Searching\u2026</p>';
 
   try {
-    const r = await fetch('/api/search', {
+    const r = await fetch('/api/s2-search', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({room: activeRoom, service, query})
+      body: JSON.stringify({room: activeRoom, query})
     });
     const items = await r.json();
-    if (!items.length) {
+    if (!Array.isArray(items) || !items.length) {
       el.innerHTML = '<p style="color:#666;font-size:0.85rem">No results.</p>';
       return;
     }
-    el.innerHTML = items.map((item, i) => `
-      <div class="media-item">
-        <div>
-          <div class="media-item-title">${item.title || item.name || item.track || '(untitled)'}</div>
-          <div class="media-item-meta">${[item.artist, item.album].filter(Boolean).join(' &middot; ')}</div>
-        </div>
-        <button class="play-btn"
-          onclick='playSearchResult(${JSON.stringify(JSON.stringify(item))})'>&#9654; Play</button>
-      </div>
-    `).join('');
+    el.innerHTML = items.map(item => {
+      const thumb = item.artwork
+        ? `<img class="media-item-thumb" src="${item.artwork}" onerror="this.style.display='none'">`
+        : '';
+      const meta = [item.artist, item.album].filter(Boolean).join(' \u00b7 ');
+      return `
+        <div class="media-item">
+          ${thumb}
+          <div style="min-width:0;flex:1">
+            <div class="media-item-title">${esc(item.title)}</div>
+            ${meta ? `<div class="media-item-meta">${esc(meta)}</div>` : ''}
+          </div>
+          <button class="play-btn" onclick='playS2Item(${JSON.stringify(item.uri)}, ${JSON.stringify(item.title)})'>&#9654; Play</button>
+        </div>`;
+    }).join('');
   } catch(e) {
     el.innerHTML = '<p style="color:#666;font-size:0.85rem">Search error.</p>';
   }
 }
 
-async function playSearchResult(itemJson) {
+async function playS2Item(uri, title) {
   if (!activeRoom) { alert('Select a room first.'); return; }
-  const item = JSON.parse(itemJson);
   await fetch('/api/play-uri', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({room: activeRoom, uri: item.uri || '', metadata: item.metadata || ''})
+    body: JSON.stringify({room: activeRoom, uri, metadata: ''})
   });
+  log_command_ui('play: ' + title.substring(0, 40));
   setTimeout(fetchStatus, 1000);
+}
+
+function log_command_ui(msg) { /* visual feedback handled by fetchStatus */ }
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 fetchStatus();
@@ -410,10 +660,13 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
     command_count = 0
 
     def log_message(self, format, *args):
-        pass  # Suppress access logs for status server
+        pass
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        qs   = parse_qs(parsed.query)
+
         if path in ("/", "/index.html"):
             self._serve_html()
         elif path == "/api/status":
@@ -422,6 +675,10 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             self._json_response(self.zone_manager.get_favorites())
         elif path == "/api/playlists":
             self._json_response(self.zone_manager.get_playlists())
+        elif path == "/api/browse":
+            object_id = qs.get("id", ["0"])[0]
+            room_name = qs.get("room", [""])[0]
+            self._handle_browse(object_id, room_name)
         else:
             self.send_response(404)
             self.end_headers()
@@ -440,26 +697,109 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                 else self.zone_manager.set_active_speaker(key)
             )
             self._json_response({"success": success})
-
         elif path == "/api/rediscover":
             self.zone_manager.force_rediscover()
             self._json_response({"triggered": True})
-
         elif path == "/api/control":
             self._handle_control(data)
-
         elif path == "/api/play-media":
             self._handle_play_media(data)
-
-        elif path == "/api/search":
-            self._handle_search(data)
-
+        elif path == "/api/s2-search":
+            self._handle_s2_search(data)
         elif path == "/api/play-uri":
             self._handle_play_uri(data)
-
         else:
             self.send_response(404)
             self.end_headers()
+
+    # -------------------------------------------------------------------------
+    # S2 ContentDirectory browse
+    # -------------------------------------------------------------------------
+
+    def _handle_browse(self, object_id: str, room_name: str):
+        # Use the explicitly passed room, or fall back to active room
+        if room_name:
+            with self.zone_manager._lock:
+                room = self.zone_manager._rooms.get(room_name)
+        else:
+            room = self.zone_manager.get_active_room()
+
+        if room is None:
+            self._json_response([])
+            return
+
+        ip = self.zone_manager.get_active_room_ip()
+        if not ip:
+            # Fallback: maybe get_active_room_ip failed; try from member_ips
+            with self.zone_manager._lock:
+                state = room.raw_state()
+            member_ips = state.get("_member_ips", {})
+            ip = member_ips.get(room.uuid, "")
+
+        if not ip:
+            logger.warning(f"No IP for room '{room.name}' — cannot browse S2 ContentDirectory")
+            self._json_response([])
+            return
+
+        items = _s2_browse(ip, object_id)
+        self._json_response(items)
+
+    # -------------------------------------------------------------------------
+    # S2 ContentDirectory search
+    # -------------------------------------------------------------------------
+
+    def _handle_s2_search(self, data: dict):
+        query = data.get("query", "").strip()
+        room_name = data.get("room", "")
+
+        if room_name:
+            with self.zone_manager._lock:
+                room = self.zone_manager._rooms.get(room_name)
+        else:
+            room = self.zone_manager.get_active_room()
+
+        if room is None or not query:
+            self._json_response([])
+            return
+
+        ip = self.zone_manager.get_active_room_ip()
+        if not ip:
+            with self.zone_manager._lock:
+                state = room.raw_state()
+            ip = state.get("_member_ips", {}).get(room.uuid, "")
+
+        if not ip:
+            self._json_response([])
+            return
+
+        # Build a SearchCriteria string for title/artist/album text search
+        criteria = (
+            f'dc:title contains "{query}" or '
+            f'upnp:artist contains "{query}" or '
+            f'upnp:album contains "{query}"'
+        )
+        items = _s2_search(ip, criteria)
+
+        # Fallback to node-sonos-http-api search if S2 search returned nothing
+        if not items:
+            raw = self.zone_manager.search(room.name, "spotify", query)
+            if not raw:
+                raw = self.zone_manager.search(room.name, "apple", query)
+            # Convert to our item format
+            for r in raw:
+                items.append({
+                    "id": r.get("uri", ""),
+                    "parent_id": "",
+                    "title": r.get("title", r.get("name", "")),
+                    "artist": r.get("artist", ""),
+                    "album": r.get("album", ""),
+                    "upnp_class": "object.item.audioItem.musicTrack",
+                    "uri": r.get("uri", ""),
+                    "artwork": r.get("albumArtUri", ""),
+                    "is_container": False,
+                })
+
+        self._json_response(items)
 
     # -------------------------------------------------------------------------
     # Playback control
@@ -472,15 +812,15 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             return
 
         action = data.get("action", "")
-        if action == "play":            room.play()
-        elif action == "pause":         room.pause()
-        elif action == "playpause":     room.toggle_playback()
-        elif action == "stop":          room.stop()
-        elif action == "next":          room.next()
-        elif action == "previous":      room.previous()
-        elif action == "volume":        room.set_volume(int(data.get("value", 0)))
-        elif action == "mute":          room.set_mute(True)
-        elif action == "unmute":        room.set_mute(False)
+        if action == "play":        room.play()
+        elif action == "pause":     room.pause()
+        elif action == "playpause": room.toggle_playback()
+        elif action == "stop":      room.stop()
+        elif action == "next":      room.next()
+        elif action == "previous":  room.previous()
+        elif action == "volume":    room.set_volume(int(data.get("value", 0)))
+        elif action == "mute":      room.set_mute(True)
+        elif action == "unmute":    room.set_mute(False)
 
         StatusRequestHandler.command_count += 1
         log_command(f"UI:{action}", {}, data.get("room", ""))
@@ -516,23 +856,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
         self._json_response({"ok": True})
 
     # -------------------------------------------------------------------------
-    # Music service search
-    # -------------------------------------------------------------------------
-
-    def _handle_search(self, data: dict):
-        room_name = data.get("room", "")
-        service   = data.get("service", "spotify")
-        query     = data.get("query", "")
-
-        if not query:
-            self._json_response([])
-            return
-
-        results = self.zone_manager.search(room_name, service, query)
-        self._json_response(results)
-
-    # -------------------------------------------------------------------------
-    # Play a URI directly (from search results)
+    # Play a URI directly
     # -------------------------------------------------------------------------
 
     def _handle_play_uri(self, data: dict):
@@ -563,14 +887,13 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
         with _command_log_lock:
             log_copy = list(_command_log)
 
-        data = {
-            "uptime": uptime_str,
+        self._json_response({
+            "uptime":        uptime_str,
             "command_count": StatusRequestHandler.command_count,
             "poll_interval": BRIDGE_CONFIG.get("poll_interval", 1.0),
-            "speakers": self.zone_manager.get_room_list(),
-            "log": log_copy,
-        }
-        self._json_response(data)
+            "speakers":      self.zone_manager.get_room_list(),
+            "log":           log_copy,
+        })
 
     # -------------------------------------------------------------------------
     # Helpers

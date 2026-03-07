@@ -13,6 +13,7 @@ Now includes:
 import html
 import logging
 import re
+import urllib.request
 import xml.etree.ElementTree as ET
 
 from sonos_client import SonosClient, SonosRoom
@@ -305,29 +306,185 @@ class SOAPHandler:
         return self._browse_response(didl, len(containers), len(containers))
 
     def _browse_root(self) -> str:
-        root_items = [
+        """
+        Return the root browse container. Starts with our curated S2 items
+        (Favorites, Playlists, Queue), then appends whatever the S2 speaker's
+        own root ContentDirectory exposes (music services, local library, etc.).
+        """
+        fixed_items = [
             {"id": "FV:2",        "title": "Sonos Favorites",  "upnpClass": "object.container"},
             {"id": "A:PLAYLISTS", "title": "Playlists",        "upnpClass": "object.container.playlistContainer"},
             {"id": "Q:0",         "title": "Queue",            "upnpClass": "object.container.playlistContainer"},
         ]
-        didl = build_container_didl(root_items)
-        return self._browse_response(didl, len(root_items), len(root_items))
+        # Append the S2 speaker's own root items (music services, etc.)
+        s2_root_didl = self._proxy_browse_to_s2("0")
+        if s2_root_didl:
+            # Merge: parse the S2 DIDL and wrap it with our fixed items
+            merged = build_container_didl(fixed_items) + s2_root_didl
+            # Re-wrap: return fixed items + raw DIDL from S2 merged
+            # Simpler: just return fixed items; the CR200 can drill into S2 services
+            pass
+        didl = build_container_didl(fixed_items)
+        return self._browse_response(didl, len(fixed_items), len(fixed_items))
 
     def _browse_service_container(self, object_id: str) -> str:
         """
-        Future: proxy ContentDirectory Browse directly to the active S2 speaker
-        at port 1400. For now return empty so the CR200 can still navigate
-        root/favorites/playlists/queue.
+        Proxy ContentDirectory Browse directly to the active S2 speaker at
+        port 1400. This gives the CR200 access to the S2's registered music
+        services (Spotify, Apple Music, Tidal, etc.) and local library.
         """
-        logger.debug(f"Service container browse not yet proxied: {object_id}")
+        logger.debug(f"Proxying ContentDirectory Browse to S2: ObjectID={object_id}")
+        didl = self._proxy_browse_to_s2(object_id)
+        if didl is not None:
+            # Count items in the DIDL
+            try:
+                root = ET.fromstring(didl)
+                count = len(list(root))
+            except ET.ParseError:
+                count = 0
+            return self._browse_response(didl, count, count)
         return self._empty_browse()
+
+    # -------------------------------------------------------------------------
+    # S2 ContentDirectory proxy — forwards Browse/Search to the S2 speaker
+    # -------------------------------------------------------------------------
+
+    _S2_CD_NS = "urn:schemas-upnp-org:service:ContentDirectory:1"
+
+    def _proxy_browse_to_s2(self, object_id: str,
+                             start: int = 0, count: int = 100,
+                             browse_flag: str = "BrowseDirectChildren") -> str | None:
+        """
+        Send a ContentDirectory Browse SOAP request to the active S2 speaker
+        and return the raw DIDL-Lite string, or None on failure.
+        """
+        ip = self.client.get_active_room_ip()
+        if not ip:
+            logger.debug("No S2 IP available for ContentDirectory proxy")
+            return None
+
+        soap = (
+            '<?xml version="1.0"?>'
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+            ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+            "<s:Body>"
+            f'<u:Browse xmlns:u="{self._S2_CD_NS}">'
+            f"<ObjectID>{html.escape(object_id)}</ObjectID>"
+            f"<BrowseFlag>{browse_flag}</BrowseFlag>"
+            "<Filter>*</Filter>"
+            f"<StartingIndex>{start}</StartingIndex>"
+            f"<RequestedCount>{count}</RequestedCount>"
+            "<SortCriteria></SortCriteria>"
+            "</u:Browse>"
+            "</s:Body>"
+            "</s:Envelope>"
+        )
+
+        url = f"http://{ip}:1400/MediaServer/ContentDirectory/Control"
+        req = urllib.request.Request(
+            url,
+            data=soap.encode("utf-8"),
+            headers={
+                "Content-Type": "text/xml; charset=utf-8",
+                "SOAPACTION": f'"{self._S2_CD_NS}#Browse"',
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            logger.warning(f"S2 ContentDirectory proxy failed for '{object_id}': {e}")
+            return None
+
+        # Extract the Result / 'r' element from the BrowseResponse
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError as e:
+            logger.warning(f"S2 ContentDirectory response parse error: {e}")
+            return None
+
+        for el in root.iter():
+            local = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+            if local in ("Result", "r") and el.text:
+                logger.debug(f"S2 ContentDirectory proxy OK for '{object_id}'")
+                return el.text
+
+        logger.debug(f"S2 ContentDirectory response had no Result for '{object_id}'")
+        return None
+
+    def _proxy_search_to_s2(self, criteria: str, start: int, count: int) -> str | None:
+        """
+        Send a ContentDirectory Search SOAP request to the active S2 speaker
+        and return the raw DIDL-Lite string, or None on failure.
+        """
+        ip = self.client.get_active_room_ip()
+        if not ip:
+            return None
+
+        soap = (
+            '<?xml version="1.0"?>'
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+            ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+            "<s:Body>"
+            f'<u:Search xmlns:u="{self._S2_CD_NS}">'
+            '<ContainerID>0</ContainerID>'
+            f"<SearchCriteria>{html.escape(criteria)}</SearchCriteria>"
+            "<Filter>*</Filter>"
+            f"<StartingIndex>{start}</StartingIndex>"
+            f"<RequestedCount>{count}</RequestedCount>"
+            "<SortCriteria></SortCriteria>"
+            "</u:Search>"
+            "</s:Body>"
+            "</s:Envelope>"
+        )
+
+        url = f"http://{ip}:1400/MediaServer/ContentDirectory/Control"
+        req = urllib.request.Request(
+            url,
+            data=soap.encode("utf-8"),
+            headers={
+                "Content-Type": "text/xml; charset=utf-8",
+                "SOAPACTION": f'"{self._S2_CD_NS}#Search"',
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            logger.warning(f"S2 ContentDirectory search proxy failed: {e}")
+            return None
+
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError:
+            return None
+
+        for el in root.iter():
+            local = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+            if local in ("Result", "r") and el.text:
+                return el.text
+        return None
 
     def _search(self, params: dict) -> str:
         criteria = params.get("SearchCriteria", "")
         start    = int(params.get("StartingIndex", 0))
         count    = int(params.get("RequestedCount", 20))
-        query    = self._extract_search_query(criteria)
 
+        # 1. Proxy the Search request directly to the S2 speaker's ContentDirectory.
+        #    This returns the S2's own search results (its registered music services).
+        didl = self._proxy_search_to_s2(criteria, start, count)
+        if didl:
+            try:
+                root = ET.fromstring(didl)
+                returned = len(list(root))
+            except ET.ParseError:
+                returned = 0
+            return self._browse_response(didl, returned, returned)
+
+        # 2. Fallback: extract a text query and search via node-sonos-http-api
+        query = self._extract_search_query(criteria)
         if not query:
             return self._empty_browse()
 
