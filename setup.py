@@ -194,27 +194,31 @@ def ensure_node_api(npm):
 
     warn("node-sonos-http-api not found.")
 
+    # The package is not on the npm registry; it must be installed from GitHub.
+    gh_url = "https://github.com/jishi/node-sonos-http-api"
+    install_spec = f"{gh_url}"
+
     if npm is None:
         print("  npm is not available — cannot install automatically.")
-        print("  Install manually:  sudo npm install -g node-sonos-http-api")
+        print(f"  Install manually:  sudo npm install -g {gh_url}")
         return ""
 
-    answer = input("  Install now? (npm install -g node-sonos-http-api) [Y/n] ").strip().lower()
+    answer = input(f"  Install now? (npm install -g {gh_url}) [Y/n] ").strip().lower()
     if answer == "n":
-        print("  Skipped. Install later:  sudo npm install -g node-sonos-http-api")
+        print(f"  Skipped. Install later:  sudo npm install -g {gh_url}")
         return ""
 
-    print("  Installing … (this may take a minute)")
+    print("  Installing from GitHub … (this may take a minute)")
     # Try without sudo first (succeeds if npm prefix is user-writable)
-    result = subprocess.run([npm, "install", "-g", "node-sonos-http-api"], timeout=300)
+    result = subprocess.run([npm, "install", "-g", install_spec], timeout=300)
     if result.returncode != 0:
         print("  Retrying with sudo …")
         result = subprocess.run(
-            ["sudo", npm, "install", "-g", "node-sonos-http-api"], timeout=300
+            ["sudo", npm, "install", "-g", install_spec], timeout=300
         )
 
     if result.returncode != 0:
-        warn("npm install failed. Try manually:  sudo npm install -g node-sonos-http-api")
+        warn(f"npm install failed. Try manually:  sudo npm install -g {gh_url}")
         return ""
 
     path = find_node_api_path()
