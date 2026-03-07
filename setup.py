@@ -261,7 +261,7 @@ def check_api(api_base, node_api_path=""):
     warn("Could not reach node-sonos-http-api.")
 
     if not node_api_path:
-        print("  Start it with:  node-sonos-http-api")
+        print("  Start it with:  node /usr/local/lib/node_modules/sonos-http-api/server.js")
         return None, [], None
 
     answer = input("  Start it now for speaker discovery? [Y/n] ").strip().lower()
@@ -299,26 +299,33 @@ def check_api(api_base, node_api_path=""):
 # ---------------------------------------------------------------------------
 
 _COMMON_NODE_PATHS = [
-    "/usr/lib/node_modules/node-sonos-http-api/server.js",
+    # GitHub install lands as "sonos-http-api" (no "node-" prefix)
+    "/usr/local/lib/node_modules/sonos-http-api/server.js",
+    "/usr/lib/node_modules/sonos-http-api/server.js",
+    os.path.expanduser("~/.config/yarn/global/node_modules/sonos-http-api/server.js"),
+    os.path.expanduser("~/.npm-global/lib/node_modules/sonos-http-api/server.js"),
+    # Legacy / alternate install names kept for compatibility
     "/usr/local/lib/node_modules/node-sonos-http-api/server.js",
+    "/usr/lib/node_modules/node-sonos-http-api/server.js",
     os.path.expanduser("~/.config/yarn/global/node_modules/node-sonos-http-api/server.js"),
     os.path.expanduser("~/.npm-global/lib/node_modules/node-sonos-http-api/server.js"),
 ]
 
 
 def find_node_api_path():
-    """Try to locate the node-sonos-http-api server.js automatically."""
-    # Ask node itself first
-    try:
-        result = subprocess.run(
-            ["node", "-e", "console.log(require.resolve('node-sonos-http-api/server.js'))"],
-            capture_output=True, text=True, timeout=5,
-        )
-        p = result.stdout.strip()
-        if p and os.path.isfile(p):
-            return p
-    except Exception:
-        pass
+    """Try to locate the sonos-http-api server.js automatically."""
+    # Ask node itself — try both module names the package may be registered under
+    for module_name in ("sonos-http-api/server.js", "node-sonos-http-api/server.js"):
+        try:
+            result = subprocess.run(
+                ["node", "-e", f"console.log(require.resolve('{module_name}'))"],
+                capture_output=True, text=True, timeout=5,
+            )
+            p = result.stdout.strip()
+            if p and os.path.isfile(p):
+                return p
+        except Exception:
+            pass
 
     for p in _COMMON_NODE_PATHS:
         if os.path.isfile(p):
