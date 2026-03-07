@@ -1,6 +1,6 @@
 # CR200 Bridge
 
-Connects a **Sonos CR200** remote to an **S2-only** Sonos setup.
+Bridges a **Sonos CR200** remote into an **S2-only** Sonos setup.
 
 Runs a fake S1-compatible UPnP device on your network that the CR200 pairs with.
 All commands are translated via **node-sonos-http-api**, which uses each speaker's
@@ -8,7 +8,7 @@ own authenticated SMAPI client — meaning Spotify, Apple Music, Tidal, favorite
 playlists, search, and now-playing metadata all work without any re-authentication.
 
 ```
-CR200 (Wi-Fi)
+CR200 (SonosNet Wi-Fi)
     │  UPnP/SOAP (port 1400)
     ▼
 [Raspberry Pi — this bridge]   ← fake S1 Sonos device
@@ -30,9 +30,24 @@ Real S2 Speakers
 
 ## Requirements
 
+### Hardware
+
+- **At least one S1-generation Sonos device wired via Ethernet** to your router.
+  The CR200 connects over **SonosNet** — Sonos's proprietary wireless mesh — not
+  standard Wi-Fi. SonosNet is only broadcast when at least one Sonos device is
+  wired; an all-S2 system where every speaker is on Wi-Fi may not broadcast a
+  SonosNet that the CR200 can join.
+
+  > **Note:** This requirement is based on how SonosNet works and has not yet been
+  > fully validated in an S1+S2 mixed environment. If you can confirm behaviour
+  > either way, please open an issue.
+
+- A machine (Raspberry Pi etc.) on the **same LAN subnet** as your Sonos speakers
+
+### Software
+
 - **Node.js 14+** and npm
 - **Python 3.10+** (stdlib only — no pip packages needed)
-- A machine (Raspberry Pi etc.) on the **same LAN subnet** as your Sonos speakers
 - Free ports: **1400** TCP, **1900** UDP multicast, **5005** TCP, **8080** TCP
 
 ---
@@ -198,6 +213,15 @@ This project has **not been fully tested**. Before using or contributing, ensure
 ---
 
 ## Troubleshooting
+
+**CR200 can't find any Wi-Fi network to join**
+The CR200 connects over **SonosNet**, not standard Wi-Fi. SonosNet is only
+broadcast when at least one Sonos device is wired via Ethernet to your router.
+If your entire system is S2 and wireless, plug one speaker in via cable — the
+CR200 should then see the SonosNet SSID during its Wi-Fi setup.
+
+> This behaviour is suspected but not yet fully validated. See the Hardware
+> requirements note above.
 
 **No rooms found on startup**
 Run `curl http://localhost:5005/zones` — if empty, node-sonos-http-api can't
